@@ -1,5 +1,6 @@
 package ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,17 +25,19 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
-import models.Photo
-import models.PhotoStatus
-import viewmodels.FotoFilterViewModel
-import repositories.PhotoRepository
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import kotlinx.coroutines.launch
+import models.Photo
+import models.PhotoStatus
+import repositories.PhotoRepository
+import utils.ImageUtils
+import viewmodels.FotoFilterViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -305,6 +308,13 @@ fun PhotoGridScreen(
 
 @Composable
 fun LargePhotoPreview(photo: Photo) {
+    // Using optimized preview image loading with JPEG priority
+    val imageBitmap = remember(photo.id) {
+        runCatching {
+            ImageUtils.loadPreviewImage(photo.jpegPath, photo.rawPath)
+        }.getOrNull()
+    }
+
     Box(
         modifier = Modifier.fillMaxSize()
             .clip(MaterialTheme.shapes.medium)
@@ -326,17 +336,29 @@ fun LargePhotoPreview(photo: Photo) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        // Placeholder for image loading
-        Box(
-            modifier = Modifier.fillMaxSize().background(Color.Gray),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Image Preview",
-                style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
-                textAlign = TextAlign.Center
+        // Image loading
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap,
+                contentDescription = "Photo Preview",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
             )
+        } else {
+            // Placeholder while loading
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Gray),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color.White)
+                Text(
+                    text = "Loading Image...",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 60.dp)
+                )
+            }
         }
 
         // Status overlay
@@ -421,6 +443,13 @@ fun PhotoThumbnail(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    // Use optimized thumbnail loading with JPEG priority for grid view
+    val imageBitmap = remember(photo.id) {
+        runCatching {
+            ImageUtils.loadThumbnail(photo.jpegPath, photo.rawPath, 160)
+        }.getOrNull()
+    }
+
     Box(
         modifier = Modifier
             .aspectRatio(4f/3f)
@@ -445,17 +474,25 @@ fun PhotoThumbnail(
             )
             .clickable { onClick() }
     ) {
-        // Placeholder for thumbnail image
-        Box(
-            modifier = Modifier.fillMaxSize().background(Color.LightGray),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Thumbnail",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.Black,
-                textAlign = TextAlign.Center
+        // Image or placeholder
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap,
+                contentDescription = "Photo Thumbnail",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
             )
+        } else {
+            // Placeholder while loading
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.LightGray),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp
+                )
+            }
         }
 
         // Status icon in corner
