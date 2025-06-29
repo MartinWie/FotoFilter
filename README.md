@@ -29,7 +29,7 @@ TBD write me if you need help
 #### Build from Source
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/fotofilter.git
+   git clone https://github.com/MartinWie/FotoFilter.git
    cd fotofilter
    ```
 2. Build the application:
