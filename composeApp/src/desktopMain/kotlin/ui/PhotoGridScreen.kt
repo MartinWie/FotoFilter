@@ -1,5 +1,10 @@
 package ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,6 +17,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,6 +55,7 @@ fun PhotoGridScreen(
     var showFolderDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showShortcutsDialog by remember { mutableStateOf(false) }
+    var isSidebarVisible by remember { mutableStateOf(false) } // Changed from true to false so sidebar is folded by default
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
 
@@ -246,21 +254,47 @@ fun PhotoGridScreen(
                     // Two-panel layout - preview and grid
                     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                         // Large preview (left side)
-                        Box(modifier = Modifier.weight(0.6f).fillMaxHeight().padding(end = 8.dp)) {
+                        Box(modifier = Modifier.weight(if (isSidebarVisible) 0.6f else 1f).fillMaxHeight().padding(end = 8.dp)) {
                             state.selectedPhoto?.let { photo ->
                                 LargePhotoPreview(photo = photo)
                             }
                         }
 
                         // Grid of thumbnails (right side)
-                        Box(modifier = Modifier.weight(0.4f).fillMaxHeight()) {
-                            PhotoGrid(
-                                photos = state.photos,
-                                selectedIndex = state.selectedIndex,
-                                onPhotoClick = { index ->
-                                    viewModel.onPhotoSelected(index)
+                        if (isSidebarVisible) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(0.4f)
+                                    .fillMaxHeight()
+                            ) {
+                                // Sidebar content
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    PhotoGrid(
+                                        photos = state.photos,
+                                        selectedIndex = state.selectedIndex,
+                                        onPhotoClick = { index ->
+                                            viewModel.onPhotoSelected(index)
+                                        }
+                                    )
                                 }
-                            )
+                            }
+                        }
+
+                        // Toggle button - always visible
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 8.dp)
+                                .align(Alignment.CenterVertically)
+                        ) {
+                            IconButton(
+                                onClick = { isSidebarVisible = !isSidebarVisible }
+                            ) {
+                                Icon(
+                                    imageVector = if (isSidebarVisible) Icons.Default.ArrowBack else Icons.Default.ArrowForward,
+                                    contentDescription = "Toggle Sidebar",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }

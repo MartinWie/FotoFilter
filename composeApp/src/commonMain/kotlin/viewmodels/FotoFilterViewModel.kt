@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import models.PhotoStatus
 import models.PhotoLibrary
 import repositories.PhotoRepository
+import utils.ImageUtils
 
 class FotoFilterViewModel {
     private val _state = MutableStateFlow(PhotoLibrary())
@@ -32,6 +33,14 @@ class FotoFilterViewModel {
                 folderPath = folderPath,
                 selectedIndex = 0
             )
+
+            // Preload images using memory-efficient loading strategy
+            ImageUtils.preloadImages(photos)
+
+            // Ensure the initial view has properly loaded images
+            if (photos.isNotEmpty()) {
+                ImageUtils.updateFocusIndex(photos, 0)
+            }
         } catch (e: Exception) {
             _state.value = _state.value.copy(isLoading = false)
             // Handle error
@@ -39,7 +48,13 @@ class FotoFilterViewModel {
     }
 
     fun onPhotoSelected(index: Int) {
-        _state.value = _state.value.copy(selectedIndex = index)
+        val currentState = _state.value
+        if (index == currentState.selectedIndex) return
+
+        _state.value = currentState.copy(selectedIndex = index)
+
+        // Update image loading to focus around the new index
+        ImageUtils.updateFocusIndex(currentState.photos, index)
     }
 
     fun handleKeyPress(key: String) {
@@ -73,18 +88,26 @@ class FotoFilterViewModel {
     private fun nextPhoto() {
         val currentState = _state.value
         if (currentState.selectedIndex < currentState.photos.size - 1) {
+            val newIndex = currentState.selectedIndex + 1
             _state.value = currentState.copy(
-                selectedIndex = currentState.selectedIndex + 1
+                selectedIndex = newIndex
             )
+
+            // Update image preloading to focus around the new index
+            ImageUtils.updateFocusIndex(currentState.photos, newIndex)
         }
     }
 
     private fun previousPhoto() {
         val currentState = _state.value
         if (currentState.selectedIndex > 0) {
+            val newIndex = currentState.selectedIndex - 1
             _state.value = currentState.copy(
-                selectedIndex = currentState.selectedIndex - 1
+                selectedIndex = newIndex
             )
+
+            // Update image preloading to focus around the new index
+            ImageUtils.updateFocusIndex(currentState.photos, newIndex)
         }
     }
 

@@ -15,6 +15,18 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 - **Dark Mode Support**: Adapts to your macOS appearance preferences
 - **Export Function**: Exports your selected photos to a new location
 
+### TODO's
+
+- Fix export logic
+- Load vertical images correct
+- Check about using preloadImages/try to optimize image loading
+- Faster start
+- Side images generate thumbnails instead of highres version for small ones
+- Add icon to app and figure out how ot make it executable
+- Mac menu (change mainkt and the about page) 
+- Shortcut for sidebar toggle
+- On start need to click on image to navigate between images(bug)
+
 ## Installation
 
 ### Requirements
