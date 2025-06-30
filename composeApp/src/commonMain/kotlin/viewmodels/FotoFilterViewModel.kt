@@ -17,7 +17,7 @@ class FotoFilterViewModel {
 
     private val photoRepository: PhotoRepository
     private val imageProcessor: ImageProcessing
-    private val viewModelScope = CoroutineScope(Dispatchers.Main)
+    private val viewModelScope = CoroutineScope(Dispatchers.Default)
 
     constructor(photoRepository: PhotoRepository, imageProcessor: ImageProcessing) {
         this.photoRepository = photoRepository
