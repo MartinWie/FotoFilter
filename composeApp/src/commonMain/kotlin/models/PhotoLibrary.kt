@@ -4,7 +4,10 @@ data class PhotoLibrary(
     val photos: List<Photo> = emptyList(),
     val selectedIndex: Int = 0,
     val isLoading: Boolean = false,
-    val folderPath: String? = null
+    val folderPath: String? = null,
+    val isExporting: Boolean = false,
+    val exportCompleted: Boolean = false,
+    val exportPath: String? = null
 ) {
     val selectedPhoto: Photo?
         get() = photos.getOrNull(selectedIndex)

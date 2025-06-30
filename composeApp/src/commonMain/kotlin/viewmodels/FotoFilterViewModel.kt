@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import models.PhotoStatus
 import models.PhotoLibrary
 import repositories.PhotoRepository
@@ -116,14 +117,42 @@ class FotoFilterViewModel {
     fun exportKeptPhotos(destinationPath: String? = null) {
         if (destinationPath == null) return
 
-        viewModelScope.launch {
-            val photosToExport = _state.value.photos.filter {
-                it.status == PhotoStatus.KEEP
-            }
+        // Set exporting state to true
+        _state.value = _state.value.copy(
+            isExporting = true,
+            exportPath = destinationPath
+        )
 
-            if (photosToExport.isNotEmpty()) {
-                photoRepository.exportPhotos(photosToExport, destinationPath)
+        viewModelScope.launch {
+            try {
+                val photosToExport = _state.value.photos.filter {
+                    it.status == PhotoStatus.KEEP
+                }
+
+                if (photosToExport.isNotEmpty()) {
+                    photoRepository.exportPhotos(photosToExport, destinationPath)
+
+                    // Set export completed
+                    _state.value = _state.value.copy(
+                        isExporting = false,
+                        exportCompleted = true
+                    )
+
+                    // Show success message for 3 seconds, then reset
+                    delay(3000)
+                    resetToStartScreen()
+                } else {
+                    // No photos to export
+                    _state.value = _state.value.copy(isExporting = false)
+                }
+            } catch (e: Exception) {
+                // Handle export error
+                _state.value = _state.value.copy(isExporting = false)
             }
         }
+    }
+
+    private fun resetToStartScreen() {
+        _state.value = PhotoLibrary()
     }
 }

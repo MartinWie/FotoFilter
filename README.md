@@ -17,13 +17,13 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
-- Fix export logic
 - Load vertical images correct
 - Side images generate thumbnails instead of highres version for small ones
 - Add icon to app and figure out how ot make it executable
 - Mac menu (change mainkt and the about page) 
 - Shortcut for sidebar toggle
 - On start need to click on image to navigate between images(bug)
+- Loading animation on start is broken
 - customize shortcuts in options
 - Add option to control image preview quality(make sure we use the JPEG's for the view)
 - Check about using preloadImages/try to optimize image loading

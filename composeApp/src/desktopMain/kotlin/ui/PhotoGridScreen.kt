@@ -1,10 +1,8 @@
 package ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandHorizontally
-import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,7 +36,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.awt.FileDialog
 import java.awt.Frame
-import java.io.File
 import kotlinx.coroutines.launch
 import models.Photo
 import models.PhotoStatus
@@ -59,242 +56,316 @@ fun PhotoGridScreen(
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
 
-    Column(
-        modifier = Modifier.fillMaxSize()
-            .onKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyDown) {
-                    when (keyEvent.key) {
-                        Key.K, Key.Spacebar -> viewModel.handleKeyPress("space")
-                        Key.D, Key.Delete -> viewModel.handleKeyPress("delete")
-                        Key.U -> viewModel.handleKeyPress("u")
-                        Key.E -> {
-                            if (state.keptPhotos > 0) showExportDialog = true
-                            true
-                        }
-                        Key.H -> {
-                            showShortcutsDialog = true
-                            true
-                        }
-                        Key.DirectionRight -> viewModel.handleKeyPress("ArrowRight")
-                        Key.DirectionLeft -> viewModel.handleKeyPress("ArrowLeft")
-                        else -> return@onKeyEvent false
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-            .focusRequester(focusRequester)
-            .clickable { focusRequester.requestFocus() }
-    ) {
-        // Minimal top bar that's smaller when no photos are loaded
-        if (state.photos.isEmpty() && !state.isLoading) {
-            // Ultra minimal header before folder selection
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    FilledTonalButton(
-                        onClick = { showFolderDialog = true },
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
-                    ) {
-                        Text("Open Photo Folder", style = MaterialTheme.typography.titleMedium)
-                    }
+    // Handle export overlay animation
+    val exportOverlayAlpha by animateFloatAsState(
+        targetValue = if (state.isExporting || state.exportCompleted) 1f else 0f,
+        animationSpec = tween(durationMillis = 500)
+    )
 
-                    OutlinedButton(
-                        onClick = { showShortcutsDialog = true },
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Text("Keyboard Shortcuts", style = MaterialTheme.typography.labelMedium)
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Main content
+        Column(
+            modifier = Modifier.fillMaxSize()
+                .onKeyEvent { keyEvent ->
+                    if (keyEvent.type == KeyEventType.KeyDown) {
+                        when (keyEvent.key) {
+                            Key.K, Key.Spacebar -> viewModel.handleKeyPress("space")
+                            Key.D, Key.Delete -> viewModel.handleKeyPress("delete")
+                            Key.U -> viewModel.handleKeyPress("u")
+                            Key.E -> {
+                                if (state.keptPhotos > 0) showExportDialog = true
+                                true
+                            }
+                            Key.H -> {
+                                showShortcutsDialog = true
+                                true
+                            }
+                            Key.DirectionRight -> viewModel.handleKeyPress("ArrowRight")
+                            Key.DirectionLeft -> viewModel.handleKeyPress("ArrowLeft")
+                            else -> return@onKeyEvent false
+                        }
+                        true
+                    } else {
+                        false
                     }
                 }
-            }
-        } else {
-            // Standard toolbar when photos are loaded
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                .focusRequester(focusRequester)
+                .clickable { focusRequester.requestFocus() }
+        ) {
+            // Minimal top bar that's smaller when no photos are loaded
+            if (state.photos.isEmpty() && !state.isLoading) {
+                // Ultra minimal header before folder selection
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    FilledTonalButton(
-                        onClick = { showFolderDialog = true },
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
-                    ) {
-                        Text("Open", style = MaterialTheme.typography.labelMedium)
-                    }
-
-                    // Status counts
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.background(
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
-                            MaterialTheme.shapes.small
-                        ).padding(horizontal = 12.dp, vertical = 6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Kept: ${state.keptPhotos}",
-                            color = Color.Green.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                        Text("|", style = MaterialTheme.typography.labelMedium)
-                        Text(
-                            text = "Discarded: ${state.discardedPhotos}",
-                            color = Color.Red.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                        Text("|", style = MaterialTheme.typography.labelMedium)
-                        Text(
-                            text = "Remaining: ${state.remainingPhotos}",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-
-                    FilledTonalButton(
-                        onClick = { showExportDialog = true },
-                        enabled = state.keptPhotos > 0,
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            "Export (${state.keptPhotos})",
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = { showShortcutsDialog = true },
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text("?", style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-            }
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-        }
-
-        when {
-            state.isLoading -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        CircularProgressIndicator()
-                        Text("Loading photos...")
-                    }
-                }
-            }
-
-            state.photos.isEmpty() -> {
-                // Empty state with instructions
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(24.dp)
-                    ) {
-                        Text(
-                            "Foto-Filter",
-                            style = MaterialTheme.typography.headlineLarge
-                        )
-
-                        Text(
-                            "Select a folder of photos to begin filtering",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-
-                        Spacer(Modifier.height(16.dp))
-
-                        Column(
-                            horizontalAlignment = Alignment.Start,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        FilledTonalButton(
+                            onClick = { showFolderDialog = true },
+                            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                         ) {
-                            Text("Keyboard Shortcuts:", fontWeight = FontWeight.Bold)
-                            Text("K or Space: Keep photo")
-                            Text("D or Delete: Discard photo")
-                            Text("U: Undecide (reset status)")
-                            Text("← →: Navigate between photos")
-                            Text("E: Export kept photos")
+                            Text("Open Photo Folder", style = MaterialTheme.typography.titleMedium)
+                        }
+
+                        OutlinedButton(
+                            onClick = { showShortcutsDialog = true },
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Text("Keyboard Shortcuts", style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
+            } else {
+                // Standard toolbar when photos are loaded
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilledTonalButton(
+                            onClick = { showFolderDialog = true },
+                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                        ) {
+                            Text("Open", style = MaterialTheme.typography.labelMedium)
+                        }
+
+                        // Status counts
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f),
+                                MaterialTheme.shapes.small
+                            ).padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = "Kept: ${state.keptPhotos}",
+                                color = Color.Green.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Text("|", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = "Discarded: ${state.discardedPhotos}",
+                                color = Color.Red.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Text("|", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = "Remaining: ${state.remainingPhotos}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = { showExportDialog = true },
+                            enabled = state.keptPhotos > 0,
+                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                "Export (${state.keptPhotos})",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = { showShortcutsDialog = true },
+                            modifier = Modifier.height(32.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text("?", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             }
 
-            else -> {
-                // Main layout with preview and grid
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // Status indicator
+            when {
+                state.isLoading -> {
                     Box(
-                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            "Photo ${state.selectedIndex + 1} of ${state.totalPhotos}",
-                            style = MaterialTheme.typography.labelLarge
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            CircularProgressIndicator()
+                            Text("Loading photos...")
+                        }
                     }
+                }
 
-                    // Two-panel layout - preview and grid
-                    Row(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-                        // Large preview (left side)
-                        Box(modifier = Modifier.weight(if (isSidebarVisible) 0.6f else 1f).fillMaxHeight().padding(end = 8.dp)) {
-                            state.selectedPhoto?.let { photo ->
-                                LargePhotoPreview(photo = photo)
+                state.photos.isEmpty() -> {
+                    // Empty state with instructions
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(24.dp)
+                        ) {
+                            Text(
+                                "Foto-Filter",
+                                style = MaterialTheme.typography.headlineLarge
+                            )
+
+                            Text(
+                                "Select a folder of photos to begin filtering",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+
+                            Spacer(Modifier.height(16.dp))
+
+                            Column(
+                                horizontalAlignment = Alignment.Start,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("Keyboard Shortcuts:", fontWeight = FontWeight.Bold)
+                                Text("K or Space: Keep photo")
+                                Text("D or Delete: Discard photo")
+                                Text("U: Undecide (reset status)")
+                                Text("← →: Navigate between photos")
+                                Text("E: Export kept photos")
                             }
                         }
+                    }
+                }
 
-                        // Grid of thumbnails (right side)
-                        if (isSidebarVisible) {
+                else -> {
+                    // Main layout with preview and grid
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Status indicator
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "Photo ${state.selectedIndex + 1} of ${state.totalPhotos}",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+
+                        // Two-panel layout - preview and grid
+                        Row(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                            // Large preview (left side)
+                            Box(modifier = Modifier.weight(if (isSidebarVisible) 0.6f else 1f).fillMaxHeight().padding(end = 8.dp)) {
+                                state.selectedPhoto?.let { photo ->
+                                    LargePhotoPreview(photo = photo)
+                                }
+                            }
+
+                            // Grid of thumbnails (right side)
+                            if (isSidebarVisible) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(0.4f)
+                                        .fillMaxHeight()
+                                ) {
+                                    // Sidebar content
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        PhotoGrid(
+                                            photos = state.photos,
+                                            selectedIndex = state.selectedIndex,
+                                            onPhotoClick = { index ->
+                                                viewModel.onPhotoSelected(index)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Toggle button - always visible
                             Box(
                                 modifier = Modifier
-                                    .weight(0.4f)
-                                    .fillMaxHeight()
+                                    .padding(start = 8.dp)
+                                    .align(Alignment.CenterVertically)
                             ) {
-                                // Sidebar content
-                                Box(modifier = Modifier.fillMaxSize()) {
-                                    PhotoGrid(
-                                        photos = state.photos,
-                                        selectedIndex = state.selectedIndex,
-                                        onPhotoClick = { index ->
-                                            viewModel.onPhotoSelected(index)
-                                        }
+                                IconButton(
+                                    onClick = { isSidebarVisible = !isSidebarVisible }
+                                ) {
+                                    Icon(
+                                        imageVector = if (isSidebarVisible) Icons.Default.ArrowBack else Icons.Default.ArrowForward,
+                                        contentDescription = "Toggle Sidebar",
+                                        tint = MaterialTheme.colorScheme.primary
                                     )
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
 
-                        // Toggle button - always visible
-                        Box(
-                            modifier = Modifier
-                                .padding(start = 8.dp)
-                                .align(Alignment.CenterVertically)
-                        ) {
-                            IconButton(
-                                onClick = { isSidebarVisible = !isSidebarVisible }
-                            ) {
-                                Icon(
-                                    imageVector = if (isSidebarVisible) Icons.Default.ArrowBack else Icons.Default.ArrowForward,
-                                    contentDescription = "Toggle Sidebar",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
+        // Export overlay
+        if (state.isExporting || state.exportCompleted) {
+            Box(
+                modifier = Modifier.fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.7f * exportOverlayAlpha))
+                    .clickable(enabled = false) {},  // Prevent clicks through the overlay
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .width(400.dp)
+                        .padding(16.dp)
+                        .animateContentSize(),
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        if (state.isExporting) {
+                            // Exporting animation
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(56.dp),
+                                strokeWidth = 4.dp
+                            )
+
+                            Text(
+                                "Exporting ${state.keptPhotos} photos...",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(MaterialTheme.shapes.small)
+                            )
+                        } else if (state.exportCompleted) {
+                            // Success animation
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Export Complete",
+                                modifier = Modifier.size(64.dp)
+                                    .background(Color(0xFF4CAF50), CircleShape)
+                                    .padding(12.dp),
+                                tint = Color.White
+                            )
+
+                            Text(
+                                "Export Complete!",
+                                style = MaterialTheme.typography.headlineSmall
+                            )
+
+                            Text(
+                                "Successfully exported ${state.keptPhotos} photos to:\n${state.exportPath}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }
