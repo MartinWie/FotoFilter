@@ -26,6 +26,9 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 - Mac menu (change mainkt and the about page) 
 - Shortcut for sidebar toggle
 - On start need to click on image to navigate between images(bug)
+- customize shortcuts in options
+- Add option to control image preview quality(make sure we use the JPEG's for the view)
+- small side images load smaller thumbnails
 
 ## Installation
 

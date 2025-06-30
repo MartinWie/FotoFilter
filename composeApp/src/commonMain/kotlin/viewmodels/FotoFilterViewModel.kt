@@ -9,17 +9,19 @@ import kotlinx.coroutines.launch
 import models.PhotoStatus
 import models.PhotoLibrary
 import repositories.PhotoRepository
-import utils.ImageUtils
+import utils.ImageProcessing
 
 class FotoFilterViewModel {
     private val _state = MutableStateFlow(PhotoLibrary())
     val state: StateFlow<PhotoLibrary> = _state.asStateFlow()
 
     private val photoRepository: PhotoRepository
+    private val imageProcessor: ImageProcessing
     private val viewModelScope = CoroutineScope(Dispatchers.Main)
 
-    constructor(photoRepository: PhotoRepository) {
+    constructor(photoRepository: PhotoRepository, imageProcessor: ImageProcessing) {
         this.photoRepository = photoRepository
+        this.imageProcessor = imageProcessor
     }
 
     suspend fun loadPhotos(folderPath: String) {
@@ -35,11 +37,11 @@ class FotoFilterViewModel {
             )
 
             // Preload images using memory-efficient loading strategy
-            ImageUtils.preloadImages(photos)
+            imageProcessor.preloadImages(photos)
 
             // Ensure the initial view has properly loaded images
             if (photos.isNotEmpty()) {
-                ImageUtils.updateFocusIndex(photos, 0)
+                imageProcessor.updateFocusIndex(photos, 0)
             }
         } catch (e: Exception) {
             _state.value = _state.value.copy(isLoading = false)
@@ -54,7 +56,7 @@ class FotoFilterViewModel {
         _state.value = currentState.copy(selectedIndex = index)
 
         // Update image loading to focus around the new index
-        ImageUtils.updateFocusIndex(currentState.photos, index)
+        imageProcessor.updateFocusIndex(currentState.photos, index)
     }
 
     fun handleKeyPress(key: String) {
@@ -94,7 +96,7 @@ class FotoFilterViewModel {
             )
 
             // Update image preloading to focus around the new index
-            ImageUtils.updateFocusIndex(currentState.photos, newIndex)
+            imageProcessor.updateFocusIndex(currentState.photos, newIndex)
         }
     }
 
@@ -107,7 +109,7 @@ class FotoFilterViewModel {
             )
 
             // Update image preloading to focus around the new index
-            ImageUtils.updateFocusIndex(currentState.photos, newIndex)
+            imageProcessor.updateFocusIndex(currentState.photos, newIndex)
         }
     }
 

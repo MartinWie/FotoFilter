@@ -49,7 +49,7 @@ import viewmodels.FotoFilterViewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PhotoGridScreen(
-    viewModel: FotoFilterViewModel = remember { FotoFilterViewModel(PhotoRepository()) }
+    viewModel: FotoFilterViewModel = remember { FotoFilterViewModel(PhotoRepository(), ImageUtils) }
 ) {
     val state by viewModel.state.collectAsState()
     var showFolderDialog by remember { mutableStateOf(false) }

@@ -22,7 +22,7 @@ import kotlin.coroutines.CoroutineContext
  * Utility functions for image handling with optimized quality and memory usage
  * Enhanced for better image quality assessment and faster loading for large folders
  */
-object ImageUtils : CoroutineScope {
+object ImageUtils : ImageProcessing, CoroutineScope {
     // Create a custom dispatcher for image loading operations specifically for desktop
     // This avoids using Dispatchers.IO which may try to reference Android classes
     private val imageProcessingDispatcher = Executors.newFixedThreadPool(8).asCoroutineDispatcher() // Increased from 4 to 8 threads
@@ -60,7 +60,7 @@ object ImageUtils : CoroutineScope {
     /**
      * Update the current focus index and preload images in the range around it
      */
-    fun updateFocusIndex(photos: List<Photo>, currentIndex: Int) {
+    override fun updateFocusIndex(photos: List<Photo>, currentIndex: Int) {
         currentPhotosList = photos
         val newRangeStart = maxOf(0, currentIndex - PRELOAD_RANGE)
         val newRangeEnd = minOf(photos.size - 1, currentIndex + PRELOAD_RANGE)
@@ -176,7 +176,7 @@ object ImageUtils : CoroutineScope {
      * Preload all thumbnails but only nearby full-resolution images
      * Optimized for large folders (1000+ images)
      */
-    fun preloadImages(photos: List<Photo>) {
+    override fun preloadImages(photos: List<Photo>) {
         if (photos.isEmpty()) return
 
         currentPhotosList = photos
