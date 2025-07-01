@@ -7,6 +7,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -20,17 +22,24 @@ import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,6 +51,8 @@ import models.PhotoStatus
 import repositories.PhotoRepository
 import utils.ImageUtils
 import viewmodels.FotoFilterViewModel
+import kotlin.math.max
+import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -420,6 +431,17 @@ fun LargePhotoPreview(photo: Photo) {
         }.getOrNull()
     }
 
+    var scale by remember { mutableStateOf(1f) }
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+
+    // Reset zoom when photo changes
+    LaunchedEffect(photo.id) {
+        scale = 1f
+        offsetX = 0f
+        offsetY = 0f
+    }
+
     Box(
         modifier = Modifier.fillMaxSize()
             .clip(MaterialTheme.shapes.medium)
@@ -441,13 +463,19 @@ fun LargePhotoPreview(photo: Photo) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        // Image loading
+        // Image loading with zoom functionality
         if (imageBitmap != null) {
-            Image(
+            ZoomableImage(
                 bitmap = imageBitmap,
-                contentDescription = "Photo Preview",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit
+                scale = scale,
+                offsetX = offsetX,
+                offsetY = offsetY,
+                onScaleChange = { newScale -> scale = newScale },
+                onOffsetChange = { newOffsetX, newOffsetY ->
+                    offsetX = newOffsetX
+                    offsetY = newOffsetY
+                },
+                modifier = Modifier.fillMaxSize()
             )
         } else {
             // Placeholder while loading
@@ -463,6 +491,39 @@ fun LargePhotoPreview(photo: Photo) {
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 60.dp)
                 )
+            }
+        }
+
+        // Zoom controls overlay
+        if (scale > 1f) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+            ) {
+                Row(
+                    modifier = Modifier.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "${(scale * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Button(
+                        onClick = {
+                            scale = 1f
+                            offsetX = 0f
+                            offsetY = 0f
+                        },
+                        modifier = Modifier.height(24.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("Reset", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
             }
         }
 
@@ -500,22 +561,26 @@ fun LargePhotoPreview(photo: Photo) {
                     }
                 }
             }
-            else -> {}
+            PhotoStatus.UNDECIDED -> {
+                // No overlay for undecided
+            }
         }
 
-        // Filename overlay at bottom
-        Box(
-            modifier = Modifier.align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.5f))
-                .padding(vertical = 8.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = photo.fileName,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White
-            )
+        // Zoom instructions overlay (when not zoomed)
+        if (scale == 1f) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+            ) {
+                Text(
+                    text = "Mouse wheel: Zoom • Drag: Pan",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(8.dp)
+                )
+            }
         }
     }
 }
@@ -713,6 +778,120 @@ private fun ShortcutRow(shortcut: String, description: String) {
         Text(
             text = description,
             style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun ZoomableImage(
+    bitmap: ImageBitmap,
+    scale: Float,
+    offsetX: Float,
+    offsetY: Float,
+    onScaleChange: (Float) -> Unit,
+    onOffsetChange: (Float, Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var imageWidth by remember { mutableStateOf(0f) }
+    var imageHeight by remember { mutableStateOf(0f) }
+    var containerWidth by remember { mutableStateOf(0f) }
+    var containerHeight by remember { mutableStateOf(0f) }
+
+    Box(
+        modifier = modifier
+            .onPointerEvent(PointerEventType.Scroll) { event ->
+                val change = event.changes.first()
+                val scrollDelta = change.scrollDelta.y
+
+                // Skip if no scroll delta (prevents issues with trackpad)
+                if (scrollDelta == 0f) return@onPointerEvent
+
+                // Calculate new scale based on scroll direction - even slower zoom for trackpad
+                val zoomFactor = if (scrollDelta > 0) 0.96f else 1.04f  // Reduced from 0.93f/1.07f
+                val newScale = (scale * zoomFactor).coerceIn(0.5f, 8.0f)
+
+                // Get the position of the cursor relative to the container
+                val pointerX = change.position.x
+                val pointerY = change.position.y
+
+                // Calculate the center of the container
+                val centerX = containerWidth / 2f
+                val centerY = containerHeight / 2f
+
+                // Calculate the position relative to center
+                val relativeX = pointerX - centerX
+                val relativeY = pointerY - centerY
+
+                // Calculate new offsets to zoom towards cursor position
+                val scaleChange = newScale / scale
+                val newOffsetX = offsetX * scaleChange + relativeX * (1 - scaleChange)
+                val newOffsetY = offsetY * scaleChange + relativeY * (1 - scaleChange)
+
+                // Calculate proper bounds based on scaled image size
+                val scaledImageWidth = imageWidth * newScale
+                val scaledImageHeight = imageHeight * newScale
+
+                val maxOffsetX = max(0f, (scaledImageWidth - containerWidth) / 2f)
+                val maxOffsetY = max(0f, (scaledImageHeight - containerHeight) / 2f)
+
+                onScaleChange(newScale)
+                onOffsetChange(
+                    newOffsetX.coerceIn(-maxOffsetX, maxOffsetX),
+                    newOffsetY.coerceIn(-maxOffsetY, maxOffsetY)
+                )
+            }
+            .pointerInput(scale) {
+                detectDragGestures(
+                    onDragStart = { },
+                    onDrag = { _, dragAmount ->
+                        // Allow panning at any zoom level (not just when zoomed in)
+                        // Calculate proper bounds based on current scale
+                        val scaledImageWidth = imageWidth * scale
+                        val scaledImageHeight = imageHeight * scale
+
+                        val maxOffsetX = max(0f, (scaledImageWidth - containerWidth) / 2f)
+                        val maxOffsetY = max(0f, (scaledImageHeight - containerHeight) / 2f)
+
+                        val newOffsetX = (offsetX + dragAmount.x).coerceIn(-maxOffsetX, maxOffsetX)
+                        val newOffsetY = (offsetY + dragAmount.y).coerceIn(-maxOffsetY, maxOffsetY)
+
+                        onOffsetChange(newOffsetX, newOffsetY)
+                    }
+                )
+            }
+            .graphicsLayer(
+                scaleX = scale,
+                scaleY = scale,
+                translationX = offsetX,
+                translationY = offsetY
+            )
+    ) {
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { coordinates ->
+                    // Update container dimensions
+                    containerWidth = coordinates.size.width.toFloat()
+                    containerHeight = coordinates.size.height.toFloat()
+
+                    // Calculate the actual displayed image dimensions
+                    val bitmapAspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                    val containerAspectRatio = containerWidth / containerHeight
+
+                    if (bitmapAspectRatio > containerAspectRatio) {
+                        // Image is wider - fit to width
+                        imageWidth = containerWidth
+                        imageHeight = containerWidth / bitmapAspectRatio
+                    } else {
+                        // Image is taller - fit to height
+                        imageHeight = containerHeight
+                        imageWidth = containerHeight * bitmapAspectRatio
+                    }
+                },
+            contentScale = ContentScale.Fit
         )
     }
 }
