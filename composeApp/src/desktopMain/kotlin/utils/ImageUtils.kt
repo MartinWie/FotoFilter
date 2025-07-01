@@ -9,14 +9,14 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
-import javax.imageio.IIOImage
-import javax.imageio.ImageWriteParam
-import javax.imageio.plugins.jpeg.JPEGImageWriteParam
 import java.awt.RenderingHints
+import java.awt.geom.AffineTransform
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
+import com.drew.imaging.ImageMetadataReader
+import com.drew.metadata.exif.ExifIFD0Directory
 
 /**
  * Utility functions for image handling with optimized quality and memory usage
@@ -250,7 +250,10 @@ object ImageUtils : ImageProcessing, CoroutineScope {
                 } ?: return@launch
 
                 try {
-                    val resized = resizeImageHighQuality(original, maxDimension, maxDimension)
+                    val orientation = getExifOrientation(file)
+                    val orientedImage = applyExifOrientation(original, orientation)
+
+                    val resized = resizeImageHighQuality(orientedImage, maxDimension, maxDimension)
 
                     // Clear reference to original to save memory
                     val bitmap = convertToHighQualityImageBitmap(resized)
@@ -304,7 +307,10 @@ object ImageUtils : ImageProcessing, CoroutineScope {
                 } ?: return@launch
 
                 try {
-                    val resized = resizeImageIfNeeded(bufferedImage, MAX_PREVIEW_DIMENSION)
+                    val orientation = getExifOrientation(file)
+                    val orientedImage = applyExifOrientation(bufferedImage, orientation)
+
+                    val resized = resizeImageIfNeeded(orientedImage, MAX_PREVIEW_DIMENSION)
                     val bitmap = convertToHighQualityImageBitmap(resized)
                     imageCache[path] = bitmap
 
@@ -351,7 +357,10 @@ object ImageUtils : ImageProcessing, CoroutineScope {
                 } ?: return null
 
                 // Preserve more detail for focus assessment
-                val resized = resizeImageIfNeeded(bufferedImage, MAX_PREVIEW_DIMENSION)
+                val orientation = getExifOrientation(file)
+                val orientedImage = applyExifOrientation(bufferedImage, orientation)
+
+                val resized = resizeImageIfNeeded(orientedImage, MAX_PREVIEW_DIMENSION)
                 val bitmap = convertToHighQualityImageBitmap(resized)
                 imageCache[path] = bitmap
                 bitmap
@@ -390,7 +399,10 @@ object ImageUtils : ImageProcessing, CoroutineScope {
                     ImageIO.read(file)
                 } ?: return null
 
-                val resized = resizeImageHighQuality(original, maxDimension, maxDimension)
+                val orientation = getExifOrientation(file)
+                val orientedImage = applyExifOrientation(original, orientation)
+
+                val resized = resizeImageHighQuality(orientedImage, maxDimension, maxDimension)
                 val bitmap = convertToHighQualityImageBitmap(resized)
                 thumbnailCache[cacheKey] = bitmap
                 bitmap
@@ -400,6 +412,136 @@ object ImageUtils : ImageProcessing, CoroutineScope {
                 null
             }
         }.getOrNull()
+    }
+
+    /**
+     * Read EXIF orientation from image file
+     */
+    private fun getExifOrientation(file: File): Int {
+        return try {
+            val metadata = ImageMetadataReader.readMetadata(file)
+            val directory = metadata.getFirstDirectoryOfType(ExifIFD0Directory::class.java)
+            directory?.getInt(ExifIFD0Directory.TAG_ORIENTATION) ?: 1
+        } catch (e: Exception) {
+            1 // Default orientation if reading fails
+        }
+    }
+
+    /**
+     * Apply EXIF orientation transformation to a BufferedImage
+     */
+    private fun applyExifOrientation(image: BufferedImage, orientation: Int): BufferedImage {
+        return when (orientation) {
+            1 -> image // Normal orientation
+            2 -> flipHorizontally(image)
+            3 -> rotate180(image)
+            4 -> flipVertically(image)
+            5 -> flipHorizontally(rotate90(image))
+            6 -> rotate90(image)
+            7 -> flipHorizontally(rotate270(image))
+            8 -> rotate270(image)
+            else -> image
+        }
+    }
+
+    /**
+     * Rotate image 90 degrees clockwise
+     */
+    private fun rotate90(image: BufferedImage): BufferedImage {
+        val width = image.width
+        val height = image.height
+        val rotated = BufferedImage(height, width, image.type)
+        val g2d = rotated.createGraphics()
+
+        val transform = AffineTransform()
+        transform.translate(height.toDouble(), 0.0)
+        transform.rotate(Math.PI / 2)
+
+        g2d.transform = transform
+        g2d.drawImage(image, 0, 0, null)
+        g2d.dispose()
+
+        return rotated
+    }
+
+    /**
+     * Rotate image 180 degrees
+     */
+    private fun rotate180(image: BufferedImage): BufferedImage {
+        val width = image.width
+        val height = image.height
+        val rotated = BufferedImage(width, height, image.type)
+        val g2d = rotated.createGraphics()
+
+        val transform = AffineTransform()
+        transform.translate(width.toDouble(), height.toDouble())
+        transform.rotate(Math.PI)
+
+        g2d.transform = transform
+        g2d.drawImage(image, 0, 0, null)
+        g2d.dispose()
+
+        return rotated
+    }
+
+    /**
+     * Rotate image 270 degrees clockwise (90 degrees counter-clockwise)
+     */
+    private fun rotate270(image: BufferedImage): BufferedImage {
+        val width = image.width
+        val height = image.height
+        val rotated = BufferedImage(height, width, image.type)
+        val g2d = rotated.createGraphics()
+
+        val transform = AffineTransform()
+        transform.translate(0.0, width.toDouble())
+        transform.rotate(-Math.PI / 2)
+
+        g2d.transform = transform
+        g2d.drawImage(image, 0, 0, null)
+        g2d.dispose()
+
+        return rotated
+    }
+
+    /**
+     * Flip image horizontally
+     */
+    private fun flipHorizontally(image: BufferedImage): BufferedImage {
+        val width = image.width
+        val height = image.height
+        val flipped = BufferedImage(width, height, image.type)
+        val g2d = flipped.createGraphics()
+
+        val transform = AffineTransform()
+        transform.translate(width.toDouble(), 0.0)
+        transform.scale(-1.0, 1.0)
+
+        g2d.transform = transform
+        g2d.drawImage(image, 0, 0, null)
+        g2d.dispose()
+
+        return flipped
+    }
+
+    /**
+     * Flip image vertically
+     */
+    private fun flipVertically(image: BufferedImage): BufferedImage {
+        val width = image.width
+        val height = image.height
+        val flipped = BufferedImage(width, height, image.type)
+        val g2d = flipped.createGraphics()
+
+        val transform = AffineTransform()
+        transform.translate(0.0, height.toDouble())
+        transform.scale(1.0, -1.0)
+
+        g2d.transform = transform
+        g2d.drawImage(image, 0, 0, null)
+        g2d.dispose()
+
+        return flipped
     }
 
     /**

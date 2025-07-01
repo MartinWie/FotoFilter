@@ -17,7 +17,8 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
-- Load vertical images correct
+- Add zoom functionality to see if image is properly sharp/in focus
+- Simplyfy the codebase and add performance improvements
 - Side images generate thumbnails instead of highres version for small ones
 - Add icon to app and figure out how ot make it executable
 - Mac menu (change mainkt and the about page) 

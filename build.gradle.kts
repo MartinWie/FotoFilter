@@ -27,6 +27,8 @@ kotlin {
                 // Add Coil for desktop image loading
                 implementation("io.coil-kt:coil-compose:2.4.0")
                 implementation("io.coil-kt:coil:2.4.0")
+                // Add metadata-extractor for EXIF orientation handling
+                implementation("com.drewnoakes:metadata-extractor:2.19.0")
             }
         }
     }
