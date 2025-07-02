@@ -73,35 +73,39 @@ fun PhotoGridScreen(
         animationSpec = tween(durationMillis = 500)
     )
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()
+        .focusRequester(focusRequester)
+        .onKeyEvent { keyEvent ->
+            if (keyEvent.type == KeyEventType.KeyDown) {
+                when (keyEvent.key) {
+                    Key.K, Key.Spacebar -> viewModel.handleKeyPress("space")
+                    Key.D, Key.Delete -> viewModel.handleKeyPress("delete")
+                    Key.U -> viewModel.handleKeyPress("u")
+                    Key.E -> {
+                        if (state.keptPhotos > 0) showExportDialog = true
+                        true
+                    }
+                    Key.H -> {
+                        showShortcutsDialog = true
+                        true
+                    }
+                    Key.DirectionRight -> viewModel.handleKeyPress("ArrowRight")
+                    Key.DirectionLeft -> viewModel.handleKeyPress("ArrowLeft")
+                    else -> return@onKeyEvent false
+                }
+                true
+            } else {
+                false
+            }
+        }
+        .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null
+        ) { focusRequester.requestFocus() }
+    ) {
         // Main content
         Column(
             modifier = Modifier.fillMaxSize()
-                .onKeyEvent { keyEvent ->
-                    if (keyEvent.type == KeyEventType.KeyDown) {
-                        when (keyEvent.key) {
-                            Key.K, Key.Spacebar -> viewModel.handleKeyPress("space")
-                            Key.D, Key.Delete -> viewModel.handleKeyPress("delete")
-                            Key.U -> viewModel.handleKeyPress("u")
-                            Key.E -> {
-                                if (state.keptPhotos > 0) showExportDialog = true
-                                true
-                            }
-                            Key.H -> {
-                                showShortcutsDialog = true
-                                true
-                            }
-                            Key.DirectionRight -> viewModel.handleKeyPress("ArrowRight")
-                            Key.DirectionLeft -> viewModel.handleKeyPress("ArrowLeft")
-                            else -> return@onKeyEvent false
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                }
-                .focusRequester(focusRequester)
-                .clickable { focusRequester.requestFocus() }
         ) {
             // Minimal top bar that's smaller when no photos are loaded
             if (state.photos.isEmpty() && !state.isLoading) {
@@ -394,8 +398,14 @@ fun PhotoGridScreen(
                         viewModel.loadPhotos(folderPath)
                     }
                 }
+                // Request focus again after dialog closes
+                focusRequester.requestFocus()
             },
-            onDismiss = { showFolderDialog = false }
+            onDismiss = {
+                showFolderDialog = false
+                // Request focus again after dialog closes
+                focusRequester.requestFocus()
+            }
         )
     }
 
@@ -407,13 +417,23 @@ fun PhotoGridScreen(
                 if (folderPath != null) {
                     viewModel.exportKeptPhotos(folderPath)
                 }
+                // Request focus again after dialog closes
+                focusRequester.requestFocus()
             },
-            onDismiss = { showExportDialog = false }
+            onDismiss = {
+                showExportDialog = false
+                // Request focus again after dialog closes
+                focusRequester.requestFocus()
+            }
         )
     }
 
     if (showShortcutsDialog) {
-        ShortcutsDialog(onDismiss = { showShortcutsDialog = false })
+        ShortcutsDialog(onDismiss = {
+            showShortcutsDialog = false
+            // Request focus again after dialog closes
+            focusRequester.requestFocus()
+        })
     }
 
     // Keyboard handling
@@ -841,22 +861,34 @@ fun ZoomableImage(
                     newOffsetY.coerceIn(-maxOffsetY, maxOffsetY)
                 )
             }
-            .pointerInput(scale) {
+            .pointerInput(scale, imageWidth, imageHeight, containerWidth, containerHeight) {
                 detectDragGestures(
                     onDragStart = { },
                     onDrag = { _, dragAmount ->
-                        // Allow panning at any zoom level (not just when zoomed in)
-                        // Calculate proper bounds based on current scale
+                        // Calculate the scaled image dimensions
                         val scaledImageWidth = imageWidth * scale
                         val scaledImageHeight = imageHeight * scale
 
-                        val maxOffsetX = max(0f, (scaledImageWidth - containerWidth) / 2f)
-                        val maxOffsetY = max(0f, (scaledImageHeight - containerHeight) / 2f)
+                        // Only allow panning if the scaled image is larger than the container
+                        var newOffsetX = offsetX
+                        var newOffsetY = offsetY
 
-                        val newOffsetX = (offsetX + dragAmount.x).coerceIn(-maxOffsetX, maxOffsetX)
-                        val newOffsetY = (offsetY + dragAmount.y).coerceIn(-maxOffsetY, maxOffsetY)
+                        // Handle horizontal panning
+                        if (scaledImageWidth > containerWidth) {
+                            val maxOffsetX = (scaledImageWidth - containerWidth) / 2f
+                            newOffsetX = (offsetX + dragAmount.x).coerceIn(-maxOffsetX, maxOffsetX)
+                        }
 
-                        onOffsetChange(newOffsetX, newOffsetY)
+                        // Handle vertical panning
+                        if (scaledImageHeight > containerHeight) {
+                            val maxOffsetY = (scaledImageHeight - containerHeight) / 2f
+                            newOffsetY = (offsetY + dragAmount.y).coerceIn(-maxOffsetY, maxOffsetY)
+                        }
+
+                        // Only update if there was an actual change
+                        if (newOffsetX != offsetX || newOffsetY != offsetY) {
+                            onOffsetChange(newOffsetX, newOffsetY)
+                        }
                     }
                 )
             }
