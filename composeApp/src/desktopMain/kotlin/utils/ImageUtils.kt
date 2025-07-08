@@ -6,604 +6,135 @@ import kotlinx.coroutines.*
 import models.Photo
 import org.jetbrains.skia.Image
 import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
 import java.awt.RenderingHints
-import java.awt.geom.AffineTransform
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.coroutines.CoroutineContext
+import java.lang.ref.SoftReference
 import com.drew.imaging.ImageMetadataReader
 import com.drew.metadata.exif.ExifIFD0Directory
 
 /**
- * Utility functions for image handling with optimized quality and memory usage
- * Enhanced for better image quality assessment and faster loading for large folders
+ * Optimized image utilities with memory management and lazy loading
  */
-object ImageUtils : ImageProcessing, CoroutineScope {
-    // Create a custom dispatcher for image loading operations specifically for desktop
-    // This avoids using Dispatchers.IO which may try to reference Android classes
-    private val imageProcessingDispatcher = Executors.newFixedThreadPool(8).asCoroutineDispatcher() // Increased from 4 to 8 threads
+object ImageUtils {
+    // Use SoftReference cache to allow GC to reclaim memory when needed
+    private val imageCache = ConcurrentHashMap<String, SoftReference<ImageBitmap>>(100)
 
-    // Coroutine context for image loading operations
-    private val job = SupervisorJob()
-    override val coroutineContext: CoroutineContext
-        get() = imageProcessingDispatcher + job
+    // Dedicated thread pool for image operations to prevent blocking UI
+    private val imageExecutor = Executors.newFixedThreadPool(2)
+    private val imageDispatcher = imageExecutor.asCoroutineDispatcher()
 
-    // Cache for loaded full-resolution images
-    private val imageCache = ConcurrentHashMap<String, ImageBitmap>()
-
-    // Cache for thumbnails (all thumbnails are kept in memory)
-    private val thumbnailCache = ConcurrentHashMap<String, ImageBitmap>()
-
-    // Loading tracking
-    private val loadingJobs = ConcurrentHashMap<String, Job>()
-
-    // Track how many files are being loaded concurrently
-    private val activeLoadsCounter = AtomicInteger(0)
-    private const val MAX_CONCURRENT_LOADS = 16
-
-    // Current preloading range
-    private var currentPreloadRangeStart = 0
-    private var currentPreloadRangeEnd = 0
-    private var currentPhotosList = listOf<Photo>()
-
-    // Maximum image dimensions to limit memory usage while maintaining enough detail for quality assessment
-    private const val MAX_PREVIEW_DIMENSION = 2400 // Increased from 1800 for better quality
-    private const val MIN_THUMBNAIL_DIMENSION = 400 // Increased from 300 for better thumbnails
-
-    // Number of images to preload before and after the current image
-    private const val PRELOAD_RANGE = 3 // Reduced from 5 to be more efficient with memory while still maintaining responsiveness
+    // Maximum dimensions to prevent memory issues
+    private const val MAX_DIMENSION = 1200  // Reduced from 1920
+    private const val THUMBNAIL_SIZE = 200   // Reduced from 300
 
     /**
-     * Update the current focus index and preload images in the range around it
+     * Load an image with automatic caching and size optimization
      */
-    override fun updateFocusIndex(photos: List<Photo>, currentIndex: Int) {
-        currentPhotosList = photos
-        val newRangeStart = maxOf(0, currentIndex - PRELOAD_RANGE)
-        val newRangeEnd = minOf(photos.size - 1, currentIndex + PRELOAD_RANGE)
+    suspend fun loadImage(photo: Photo, isThumbnail: Boolean = false): ImageBitmap? = withContext(imageDispatcher) {
+        val path = photo.jpegPath ?: photo.rawPath
+        val cacheKey = if (isThumbnail) "$path-thumb" else path
 
-        // If the range has changed significantly, update the preloading
-        if (newRangeStart != currentPreloadRangeStart || newRangeEnd != currentPreloadRangeEnd) {
-            launch {
-                // Release memory for images outside the preload range
-                pruneImageCache(photos, newRangeStart, newRangeEnd)
+        // Check cache first - handle SoftReference
+        imageCache[cacheKey]?.get()?.let { return@withContext it }
 
-                // Preload new range
-                preloadRangeAround(photos, currentIndex)
-            }
+        try {
+            val file = File(path)
+            if (!file.exists()) return@withContext null
 
-            currentPreloadRangeStart = newRangeStart
-            currentPreloadRangeEnd = newRangeEnd
-        }
-    }
+            val originalImage = ImageIO.read(file) ?: return@withContext null
 
-    /**
-     * Clean up images outside the current range to conserve memory
-     */
-    private fun pruneImageCache(photos: List<Photo>, rangeStart: Int, rangeEnd: Int) {
-        if (photos.isEmpty()) return
+            // Apply EXIF orientation
+            val orientedImage = applyExifOrientation(originalImage, getExifOrientation(file))
 
-        // Build set of paths that should remain in cache
-        val pathsToKeep = mutableSetOf<String>()
-        for (i in rangeStart..rangeEnd) {
-            if (i >= 0 && i < photos.size) {
-                val photo = photos[i]
-                val path = photo.jpegPath ?: photo.rawPath
-                pathsToKeep.add(path)
-            }
-        }
-
-        // Remove all cached full-resolution images not in the keep set
-        val keysToRemove = mutableListOf<String>()
-        imageCache.keys().asSequence().forEach { path ->
-            if (!pathsToKeep.contains(path)) {
-                keysToRemove.add(path)
-            }
-        }
-
-        // Remove each item outside of range
-        keysToRemove.forEach { imageCache.remove(it) }
-    }
-
-    /**
-     * Preload all images in range around current index
-     */
-    fun preloadRangeAround(photos: List<Photo>, currentIndex: Int) {
-        if (photos.isEmpty()) return
-
-        // Calculate range ensuring it's within bounds
-        val startIndex = maxOf(0, currentIndex - PRELOAD_RANGE)
-        val endIndex = minOf(photos.size - 1, currentIndex + PRELOAD_RANGE)
-
-        // Cancel any loading jobs outside the range
-        val pathsInRange = (startIndex..endIndex).mapNotNull { index ->
-            if (index >= 0 && index < photos.size) {
-                val photo = photos[index]
-                photo.jpegPath ?: photo.rawPath
-            } else null
-        }.toSet()
-
-        loadingJobs.keys.toList().forEach { path ->
-            if (!path.contains("-") && !pathsInRange.contains(path)) {  // Not a thumbnail (doesn't contain "-")
-                loadingJobs[path]?.cancel()
-                loadingJobs.remove(path)
-            }
-        }
-
-        // Always preload thumbnails for all photos
-        launch {
-            photos.forEach { photo ->
-                // Always load thumbnails for all photos
-                loadThumbnailAsync(photo.jpegPath, photo.rawPath)
-            }
-        }
-
-        // Load full-resolution images only for the range
-        launch {
-            // Start with current photo for best user experience
-            if (currentIndex >= 0 && currentIndex < photos.size) {
-                val currentPhoto = photos[currentIndex]
-                loadPreviewImageAsync(currentPhoto.jpegPath, currentPhoto.rawPath)
-            }
-
-            // Then preload next and previous in alternating order
-            var nextIndex = currentIndex + 1
-            var prevIndex = currentIndex - 1
-
-            while (nextIndex <= endIndex || prevIndex >= startIndex) {
-                if (nextIndex <= endIndex && nextIndex < photos.size) {
-                    val nextPhoto = photos[nextIndex]
-                    loadPreviewImageAsync(nextPhoto.jpegPath, nextPhoto.rawPath)
-                    nextIndex++
-                }
-
-                if (prevIndex >= startIndex && prevIndex >= 0) {
-                    val prevPhoto = photos[prevIndex]
-                    loadPreviewImageAsync(prevPhoto.jpegPath, prevPhoto.rawPath)
-                    prevIndex--
-                }
-
-                // Brief delay to allow other operations
-                delay(5)
-            }
-        }
-    }
-
-    /**
-     * Preload all thumbnails but only nearby full-resolution images
-     * Optimized for large folders (1000+ images)
-     */
-    override fun preloadImages(photos: List<Photo>) {
-        if (photos.isEmpty()) return
-
-        currentPhotosList = photos
-
-        // For large collections, use a more efficient batch loading approach
-        val isBatchMode = photos.size > 1000
-
-        launch {
-            if (isBatchMode) {
-                // For very large folders, load thumbnails in batches
-                photos.chunked(100).forEach { batch ->
-                    batch.forEach { photo ->
-                        while (activeLoadsCounter.get() >= MAX_CONCURRENT_LOADS) {
-                            delay(10) // Wait until some loads complete
-                        }
-                        loadThumbnailAsync(photo.jpegPath, photo.rawPath)
-                    }
-                    delay(50) // Small pause between batches to allow UI updates
-                }
+            // Resize aggressively to save memory
+            val finalImage = if (isThumbnail) {
+                resizeImage(orientedImage, THUMBNAIL_SIZE)
             } else {
-                // Standard loading for smaller folders
-                photos.forEach { photo ->
-                    loadThumbnailAsync(photo.jpegPath, photo.rawPath)
-                }
+                resizeImage(orientedImage, MAX_DIMENSION)
             }
 
-            // For full images, only preload the first few
-            val initialPreloadCount = minOf(photos.size, 2 * PRELOAD_RANGE + 1)
-            for (i in 0 until initialPreloadCount) {
-                val photo = photos[i]
-                loadPreviewImageAsync(photo.jpegPath, photo.rawPath)
+            val imageBitmap = convertToImageBitmap(finalImage)
+
+            // Cache using SoftReference - GC can reclaim if memory is low
+            imageCache[cacheKey] = SoftReference(imageBitmap)
+
+            // Aggressive cache size management
+            if (imageCache.size > 50) {
+                cleanupCache()
             }
 
-            currentPreloadRangeStart = 0
-            currentPreloadRangeEnd = initialPreloadCount - 1
-        }
-    }
-
-    /**
-     * Asynchronously load a thumbnail with concurrency control
-     */
-    private fun loadThumbnailAsync(jpegPath: String?, rawPath: String, maxDimension: Int = MIN_THUMBNAIL_DIMENSION): Job {
-        val path = jpegPath ?: rawPath
-        val cacheKey = "$path-$maxDimension"
-
-        // Don't start duplicate jobs
-        if (loadingJobs.containsKey(cacheKey)) {
-            return loadingJobs[cacheKey]!!
-        }
-
-        // If already cached, return completed job
-        if (thumbnailCache.containsKey(cacheKey)) {
-            return CompletableDeferred<Unit>().apply { complete(Unit) }
-        }
-
-        val job = launch {
-            activeLoadsCounter.incrementAndGet()
-            try {
-                val file = File(path)
-                if (!file.exists()) return@launch
-
-                // Load and resize with better quality
-                val original = withContext(imageProcessingDispatcher) {
-                    try {
-                        ImageIO.read(file)
-                    } catch (e: OutOfMemoryError) {
-                        System.gc()
-                        delay(100)
-                        null
-                    }
-                } ?: return@launch
-
-                try {
-                    val orientation = getExifOrientation(file)
-                    val orientedImage = applyExifOrientation(original, orientation)
-
-                    val resized = resizeImageHighQuality(orientedImage, maxDimension, maxDimension)
-
-                    // Clear reference to original to save memory
-                    val bitmap = convertToHighQualityImageBitmap(resized)
-                    thumbnailCache[cacheKey] = bitmap
-
-                    // Help garbage collector
-                    System.gc()
-                } catch (e: OutOfMemoryError) {
-                    System.gc()
-                }
-            } finally {
-                activeLoadsCounter.decrementAndGet()
-                loadingJobs.remove(cacheKey)
-            }
-        }
-
-        loadingJobs[cacheKey] = job
-        return job
-    }
-
-    /**
-     * Asynchronously load a preview image with concurrency control
-     */
-    private fun loadPreviewImageAsync(jpegPath: String?, rawPath: String): Job {
-        val path = jpegPath ?: rawPath
-
-        // Don't start duplicate jobs
-        if (loadingJobs.containsKey(path)) {
-            return loadingJobs[path]!!
-        }
-
-        // If already cached, return completed job
-        if (imageCache.containsKey(path)) {
-            return CompletableDeferred<Unit>().apply { complete(Unit) }
-        }
-
-        val job = launch {
-            activeLoadsCounter.incrementAndGet()
-            try {
-                val file = File(path)
-                if (!file.exists()) return@launch
-
-                val bufferedImage = withContext(imageProcessingDispatcher) {
-                    try {
-                        ImageIO.read(file)
-                    } catch (e: OutOfMemoryError) {
-                        System.gc()
-                        delay(100)
-                        null
-                    }
-                } ?: return@launch
-
-                try {
-                    val orientation = getExifOrientation(file)
-                    val orientedImage = applyExifOrientation(bufferedImage, orientation)
-
-                    val resized = resizeImageIfNeeded(orientedImage, MAX_PREVIEW_DIMENSION)
-                    val bitmap = convertToHighQualityImageBitmap(resized)
-                    imageCache[path] = bitmap
-
-                    // Help garbage collector
-                    System.gc()
-                } catch (e: OutOfMemoryError) {
-                    System.gc()
-                }
-            } finally {
-                activeLoadsCounter.decrementAndGet()
-                loadingJobs.remove(path)
-            }
-        }
-
-        loadingJobs[path] = job
-        return job
-    }
-
-    /**
-     * Load an image optimized for preview with highest quality for focus assessment
-     * Falls back to RAW only if JPEG is unavailable
-     */
-    fun loadPreviewImage(jpegPath: String?, rawPath: String): ImageBitmap? {
-        // Always prefer JPEG path for performance if available
-        val path = jpegPath ?: rawPath
-
-        // Return from cache if available
-        imageCache[path]?.let { return it }
-
-        // Start async loading if not already started
-        if (!loadingJobs.containsKey(path)) {
-            loadPreviewImageAsync(jpegPath, rawPath)
-        }
-
-        // For synchronous use, load immediately but with safety measures
-        return runCatching {
-            val file = File(path)
-            if (!file.exists()) return null
-
-            try {
-                // Use runBlocking with our custom dispatcher to avoid Android references
-                val bufferedImage = runBlocking(imageProcessingDispatcher) {
-                    ImageIO.read(file)
-                } ?: return null
-
-                // Preserve more detail for focus assessment
-                val orientation = getExifOrientation(file)
-                val orientedImage = applyExifOrientation(bufferedImage, orientation)
-
-                val resized = resizeImageIfNeeded(orientedImage, MAX_PREVIEW_DIMENSION)
-                val bitmap = convertToHighQualityImageBitmap(resized)
-                imageCache[path] = bitmap
-                bitmap
-            } catch (e: OutOfMemoryError) {
-                // If we encounter memory issues, suggest garbage collection and return null
-                System.gc()
-                null
-            }
-        }.getOrNull()
-    }
-
-    /**
-     * Load a thumbnail version of the image with better quality for focus assessment
-     */
-    fun loadThumbnail(jpegPath: String?, rawPath: String, maxDimension: Int = MIN_THUMBNAIL_DIMENSION): ImageBitmap? {
-        // Always prefer JPEG for thumbnails
-        val path = jpegPath ?: rawPath
-        val cacheKey = "$path-$maxDimension"
-
-        // Return from cache if available
-        thumbnailCache[cacheKey]?.let { return it }
-
-        // Start async loading if not already started
-        if (!loadingJobs.containsKey(cacheKey)) {
-            loadThumbnailAsync(jpegPath, rawPath, maxDimension)
-        }
-
-        // For synchronous use, load immediately but with safety measures
-        return runCatching {
-            val file = File(path)
-            if (!file.exists()) return null
-
-            try {
-                // Use runBlocking with our custom dispatcher to avoid Android references
-                val original = runBlocking(imageProcessingDispatcher) {
-                    ImageIO.read(file)
-                } ?: return null
-
-                val orientation = getExifOrientation(file)
-                val orientedImage = applyExifOrientation(original, orientation)
-
-                val resized = resizeImageHighQuality(orientedImage, maxDimension, maxDimension)
-                val bitmap = convertToHighQualityImageBitmap(resized)
-                thumbnailCache[cacheKey] = bitmap
-                bitmap
-            } catch (e: OutOfMemoryError) {
-                // If we encounter memory issues, suggest garbage collection and return null
-                System.gc()
-                null
-            }
-        }.getOrNull()
-    }
-
-    /**
-     * Read EXIF orientation from image file
-     */
-    private fun getExifOrientation(file: File): Int {
-        return try {
-            val metadata = ImageMetadataReader.readMetadata(file)
-            val directory = metadata.getFirstDirectoryOfType(ExifIFD0Directory::class.java)
-            directory?.getInt(ExifIFD0Directory.TAG_ORIENTATION) ?: 1
+            imageBitmap
+        } catch (e: OutOfMemoryError) {
+            // Handle OOM by clearing cache and forcing GC
+            clearCache()
+            System.gc()
+            null
         } catch (e: Exception) {
-            1 // Default orientation if reading fails
+            null
         }
     }
 
     /**
-     * Apply EXIF orientation transformation to a BufferedImage
+     * Get thumbnail for a photo with aggressive caching
      */
-    private fun applyExifOrientation(image: BufferedImage, orientation: Int): BufferedImage {
-        return when (orientation) {
-            1 -> image // Normal orientation
-            2 -> flipHorizontally(image)
-            3 -> rotate180(image)
-            4 -> flipVertically(image)
-            5 -> flipHorizontally(rotate90(image))
-            6 -> rotate90(image)
-            7 -> flipHorizontally(rotate270(image))
-            8 -> rotate270(image)
-            else -> image
+    suspend fun getThumbnail(photo: Photo): ImageBitmap? = loadImage(photo, true)
+
+    /**
+     * Get full-size preview for a photo
+     */
+    suspend fun getPreview(photo: Photo): ImageBitmap? = loadImage(photo, false)
+
+    /**
+     * Clear cache and force garbage collection
+     */
+    fun clearCache() {
+        imageCache.clear()
+        System.gc()
+    }
+
+    /**
+     * Clean up cache by removing entries with cleared SoftReferences
+     */
+    private fun cleanupCache() {
+        val keysToRemove = mutableListOf<String>()
+        imageCache.forEach { (key, softRef) ->
+            if (softRef.get() == null) {
+                keysToRemove.add(key)
+            }
         }
-    }
+        keysToRemove.forEach { imageCache.remove(it) }
 
-    /**
-     * Rotate image 90 degrees clockwise
-     */
-    private fun rotate90(image: BufferedImage): BufferedImage {
-        val width = image.width
-        val height = image.height
-        val rotated = BufferedImage(height, width, image.type)
-        val g2d = rotated.createGraphics()
-
-        val transform = AffineTransform()
-        transform.translate(height.toDouble(), 0.0)
-        transform.rotate(Math.PI / 2)
-
-        g2d.transform = transform
-        g2d.drawImage(image, 0, 0, null)
-        g2d.dispose()
-
-        return rotated
-    }
-
-    /**
-     * Rotate image 180 degrees
-     */
-    private fun rotate180(image: BufferedImage): BufferedImage {
-        val width = image.width
-        val height = image.height
-        val rotated = BufferedImage(width, height, image.type)
-        val g2d = rotated.createGraphics()
-
-        val transform = AffineTransform()
-        transform.translate(width.toDouble(), height.toDouble())
-        transform.rotate(Math.PI)
-
-        g2d.transform = transform
-        g2d.drawImage(image, 0, 0, null)
-        g2d.dispose()
-
-        return rotated
-    }
-
-    /**
-     * Rotate image 270 degrees clockwise (90 degrees counter-clockwise)
-     */
-    private fun rotate270(image: BufferedImage): BufferedImage {
-        val width = image.width
-        val height = image.height
-        val rotated = BufferedImage(height, width, image.type)
-        val g2d = rotated.createGraphics()
-
-        val transform = AffineTransform()
-        transform.translate(0.0, width.toDouble())
-        transform.rotate(-Math.PI / 2)
-
-        g2d.transform = transform
-        g2d.drawImage(image, 0, 0, null)
-        g2d.dispose()
-
-        return rotated
-    }
-
-    /**
-     * Flip image horizontally
-     */
-    private fun flipHorizontally(image: BufferedImage): BufferedImage {
-        val width = image.width
-        val height = image.height
-        val flipped = BufferedImage(width, height, image.type)
-        val g2d = flipped.createGraphics()
-
-        val transform = AffineTransform()
-        transform.translate(width.toDouble(), 0.0)
-        transform.scale(-1.0, 1.0)
-
-        g2d.transform = transform
-        g2d.drawImage(image, 0, 0, null)
-        g2d.dispose()
-
-        return flipped
-    }
-
-    /**
-     * Flip image vertically
-     */
-    private fun flipVertically(image: BufferedImage): BufferedImage {
-        val width = image.width
-        val height = image.height
-        val flipped = BufferedImage(width, height, image.type)
-        val g2d = flipped.createGraphics()
-
-        val transform = AffineTransform()
-        transform.translate(0.0, height.toDouble())
-        transform.scale(1.0, -1.0)
-
-        g2d.transform = transform
-        g2d.drawImage(image, 0, 0, null)
-        g2d.dispose()
-
-        return flipped
-    }
-
-    /**
-     * Convert a BufferedImage to highest quality ImageBitmap
-     */
-    private fun convertToHighQualityImageBitmap(bufferedImage: BufferedImage): ImageBitmap {
-        val outputStream = ByteArrayOutputStream()
-
-        // Use PNG for lossless conversion of important images
-        ImageIO.write(bufferedImage, "png", outputStream)
-        val byteArray = outputStream.toByteArray()
-        return Image.makeFromEncoded(byteArray).toComposeImageBitmap()
-    }
-
-    /**
-     * Resize image only if it exceeds maximum dimensions, preserving quality
-     */
-    private fun resizeImageIfNeeded(image: BufferedImage, maxDimension: Int): BufferedImage {
-        val width = image.width
-        val height = image.height
-
-        // Only resize if image is too large
-        if (width <= maxDimension && height <= maxDimension) {
-            return image
+        // If still too large, remove oldest entries
+        if (imageCache.size > 30) {
+            val keysToRemoveMore = imageCache.keys.take(imageCache.size - 20)
+            keysToRemoveMore.forEach { imageCache.remove(it) }
         }
 
-        // Use highest quality resizing for focus assessment
-        return resizeImageHighQuality(image, maxDimension, maxDimension)
+        System.gc() // Suggest garbage collection
     }
 
-    /**
-     * Resize an image while maintaining aspect ratio with highest quality settings
-     */
-    private fun resizeImageHighQuality(image: BufferedImage, maxWidth: Int, maxHeight: Int): BufferedImage {
-        val originalWidth = image.width
-        val originalHeight = image.height
+    private fun resizeImage(image: BufferedImage, maxDimension: Int): BufferedImage {
+        val width = image.width
+        val height = image.height
 
-        // Calculate dimensions while maintaining aspect ratio
-        var newWidth = originalWidth
-        var newHeight = originalHeight
+        // Don't upscale and be more aggressive with downsizing
+        if (width <= maxDimension && height <= maxDimension) return image
 
-        // Scale down if needed
-        if (originalWidth > maxWidth || originalHeight > maxHeight) {
-            val widthRatio = maxWidth.toDouble() / originalWidth
-            val heightRatio = maxHeight.toDouble() / originalHeight
-            val scaleFactor = minOf(widthRatio, heightRatio)
+        val scale = minOf(maxDimension.toDouble() / width, maxDimension.toDouble() / height)
+        val newWidth = (width * scale).toInt()
+        val newHeight = (height * scale).toInt()
 
-            newWidth = (originalWidth * scaleFactor).toInt()
-            newHeight = (originalHeight * scaleFactor).toInt()
-        }
-
-        // Create and draw the resized image with maximum quality
+        // Use TYPE_INT_RGB instead of original type to save memory
         val resized = BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB)
         val g2d = resized.createGraphics()
 
-        // Use highest quality rendering for focus assessment
-        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
-        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
-        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-        g2d.setRenderingHint(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY)
-        g2d.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY)
-        g2d.setRenderingHint(RenderingHints.KEY_DITHERING, RenderingHints.VALUE_DITHER_ENABLE)
+        // Use faster interpolation for better performance
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED) // Changed from QUALITY to SPEED
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF) // Disabled for speed
 
         g2d.drawImage(image, 0, 0, newWidth, newHeight, null)
         g2d.dispose()
@@ -611,22 +142,54 @@ object ImageUtils : ImageProcessing, CoroutineScope {
         return resized
     }
 
-    /**
-     * Clear the image caches to free memory and cancel any pending jobs
-     */
-    fun clearCaches() {
-        imageCache.clear()
-        thumbnailCache.clear()
-
-        // Cancel all loading jobs
-        loadingJobs.values.forEach { it.cancel() }
-        loadingJobs.clear()
+    private fun getExifOrientation(file: File): Int {
+        return try {
+            val metadata = ImageMetadataReader.readMetadata(file)
+            val exifDirectory = metadata.getFirstDirectoryOfType(ExifIFD0Directory::class.java)
+            exifDirectory?.getInt(ExifIFD0Directory.TAG_ORIENTATION) ?: 1
+        } catch (e: Exception) {
+            1
+        }
     }
 
-    /**
-     * Clean up resources when application shuts down
-     */
-    fun shutdown() {
-        job.cancel()
+    private fun applyExifOrientation(image: BufferedImage, orientation: Int): BufferedImage {
+        return when (orientation) {
+            3 -> rotateImage(image, 180.0)
+            6 -> rotateImage(image, 90.0)
+            8 -> rotateImage(image, -90.0)
+            else -> image
+        }
+    }
+
+    private fun rotateImage(image: BufferedImage, degrees: Double): BufferedImage {
+        val radians = Math.toRadians(degrees)
+        val sin = kotlin.math.abs(kotlin.math.sin(radians))
+        val cos = kotlin.math.abs(kotlin.math.cos(radians))
+
+        val newWidth = (image.width * cos + image.height * sin).toInt()
+        val newHeight = (image.width * sin + image.height * cos).toInt()
+
+        val rotated = BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB)
+        val g2d = rotated.createGraphics()
+
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g2d.translate(newWidth / 2, newHeight / 2)
+        g2d.rotate(radians)
+        g2d.drawImage(image, -image.width / 2, -image.height / 2, null)
+        g2d.dispose()
+
+        return rotated
+    }
+
+    private fun convertToImageBitmap(bufferedImage: BufferedImage): ImageBitmap {
+        return Image.makeFromEncoded(
+            bufferedImageToByteArray(bufferedImage)
+        ).toComposeImageBitmap()
+    }
+
+    private fun bufferedImageToByteArray(image: BufferedImage): ByteArray {
+        val baos = java.io.ByteArrayOutputStream()
+        ImageIO.write(image, "JPEG", baos) // Use JPEG instead of PNG for smaller file size
+        return baos.toByteArray()
     }
 }

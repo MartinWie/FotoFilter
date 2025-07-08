@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import models.Photo
 import models.PhotoStatus
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class FileService {
     suspend fun scanFolder(folderPath: String): List<Photo> = withContext(Dispatchers.IO) {
@@ -13,21 +15,23 @@ class FileService {
 
         val files = folder.listFiles() ?: return@withContext emptyList()
 
-        val rawFiles = files.filter { isRawFile(it.extension) }
-        val jpegFiles = files.filter { isJpegFile(it.extension) }
+        // Group files by base name for RAW/JPEG pairs
+        val filesByBaseName = files.groupBy { it.nameWithoutExtension }
 
-        // Find CR3/JPEG pairs based on filename
-        rawFiles.mapNotNull { rawFile ->
-            val baseName = rawFile.nameWithoutExtension
-            val jpegFile = jpegFiles.find { it.nameWithoutExtension == baseName }
+        filesByBaseName.mapNotNull { (baseName, files) ->
+            val rawFile = files.find { isRawFile(it.extension) }
+            val jpegFile = files.find { isJpegFile(it.extension) }
 
-            Photo(
-                rawPath = rawFile.absolutePath,
-                jpegPath = jpegFile?.absolutePath,
-                fileName = baseName,
-                dateCreated = rawFile.lastModified(),
-                status = PhotoStatus.UNDECIDED
-            )
+            // Only include if we have at least a RAW file
+            rawFile?.let {
+                Photo(
+                    rawPath = it.absolutePath,
+                    jpegPath = jpegFile?.absolutePath,
+                    fileName = baseName,
+                    dateCreated = it.lastModified(),
+                    status = PhotoStatus.UNDECIDED
+                )
+            }
         }.sortedBy { it.dateCreated }
     }
 
@@ -38,27 +42,29 @@ class FileService {
         }
 
         photos.forEach { photo ->
-            // Copy the RAW file
-            val rawFile = File(photo.rawPath)
-            if (rawFile.exists()) {
-                rawFile.copyTo(File(destDir, rawFile.name), overwrite = true)
-            }
+            // Copy RAW file
+            copyFileIfExists(photo.rawPath, destDir)
 
-            // Copy the JPEG file if it exists
-            photo.jpegPath?.let {
-                val jpegFile = File(it)
-                if (jpegFile.exists()) {
-                    jpegFile.copyTo(File(destDir, jpegFile.name), overwrite = true)
-                }
+            // Copy JPEG file if it exists
+            photo.jpegPath?.let { jpegPath ->
+                copyFileIfExists(jpegPath, destDir)
             }
         }
     }
 
+    private fun copyFileIfExists(sourcePath: String, destDir: File) {
+        val sourceFile = File(sourcePath)
+        if (sourceFile.exists()) {
+            val destFile = File(destDir, sourceFile.name)
+            Files.copy(sourceFile.toPath(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
     private fun isRawFile(extension: String): Boolean {
-        return extension.lowercase() in listOf("cr3", "cr2", "nef", "arw", "dng", "raw")
+        return extension.lowercase() in setOf("cr3", "cr2", "nef", "arw", "dng", "raw", "raf", "orf")
     }
 
     private fun isJpegFile(extension: String): Boolean {
-        return extension.lowercase() in listOf("jpg", "jpeg")
+        return extension.lowercase() in setOf("jpg", "jpeg")
     }
 }

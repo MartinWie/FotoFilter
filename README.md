@@ -29,6 +29,7 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 - Add option to control image preview quality(make sure we use the JPEG's for the view)
 - Check about using preloadImages/try to optimize image loading
 - Faster start
+- When click on remaining only show remaining(same for others)
 
 ## Installation
 

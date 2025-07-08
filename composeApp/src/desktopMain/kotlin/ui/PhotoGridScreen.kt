@@ -48,7 +48,6 @@ import java.awt.Frame
 import kotlinx.coroutines.launch
 import models.Photo
 import models.PhotoStatus
-import repositories.PhotoRepository
 import utils.ImageUtils
 import viewmodels.FotoFilterViewModel
 import kotlin.math.max
@@ -57,7 +56,7 @@ import kotlin.math.min
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PhotoGridScreen(
-    viewModel: FotoFilterViewModel = remember { FotoFilterViewModel(PhotoRepository(), ImageUtils) }
+    viewModel: FotoFilterViewModel = remember { FotoFilterViewModel() }
 ) {
     val state by viewModel.state.collectAsState()
     var showFolderDialog by remember { mutableStateOf(false) }
@@ -444,11 +443,11 @@ fun PhotoGridScreen(
 
 @Composable
 fun LargePhotoPreview(photo: Photo) {
-    // Using optimized preview image loading with JPEG priority
-    val imageBitmap = remember(photo.id) {
-        runCatching {
-            ImageUtils.loadPreviewImage(photo.jpegPath, photo.rawPath)
-        }.getOrNull()
+    // Using optimized preview image loading with simplified ImageUtils
+    var imageBitmap by remember(photo.id) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(photo.id) {
+        imageBitmap = ImageUtils.getPreview(photo)
     }
 
     var scale by remember { mutableStateOf(1f) }
@@ -484,9 +483,9 @@ fun LargePhotoPreview(photo: Photo) {
         contentAlignment = Alignment.Center
     ) {
         // Image loading with zoom functionality
-        if (imageBitmap != null) {
+        imageBitmap?.let { bitmap ->
             ZoomableImage(
-                bitmap = imageBitmap,
+                bitmap = bitmap,
                 scale = scale,
                 offsetX = offsetX,
                 offsetY = offsetY,
@@ -497,7 +496,7 @@ fun LargePhotoPreview(photo: Photo) {
                 },
                 modifier = Modifier.fillMaxSize()
             )
-        } else {
+        } ?: run {
             // Placeholder while loading
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.Gray),
@@ -633,11 +632,11 @@ fun PhotoThumbnail(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
-    // Use optimized thumbnail loading with JPEG priority for grid view
-    val imageBitmap = remember(photo.id) {
-        runCatching {
-            ImageUtils.loadThumbnail(photo.jpegPath, photo.rawPath, 160)
-        }.getOrNull()
+    // Use optimized thumbnail loading with simplified ImageUtils
+    var imageBitmap by remember(photo.id) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(photo.id) {
+        imageBitmap = ImageUtils.getThumbnail(photo)
     }
 
     Box(
@@ -665,14 +664,14 @@ fun PhotoThumbnail(
             .clickable { onClick() }
     ) {
         // Image or placeholder
-        if (imageBitmap != null) {
+        imageBitmap?.let { bitmap ->
             Image(
-                bitmap = imageBitmap,
+                bitmap = bitmap,
                 contentDescription = "Photo Thumbnail",
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
-        } else {
+        } ?: run {
             // Placeholder while loading
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.LightGray),
