@@ -3,6 +3,7 @@ package ui
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -42,12 +45,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.awt.FileDialog
 import java.awt.Frame
 import kotlinx.coroutines.launch
 import models.Photo
 import models.PhotoStatus
+import services.CachedProject
 import utils.ImageUtils
 import utils.Logger
 import viewmodels.FotoFilterViewModel
@@ -61,12 +66,27 @@ fun PhotoGridScreen(
     val state by viewModel.state.collectAsState()
     val importProgress by viewModel.importProgress.collectAsState()
     val isCacheLoading by viewModel.isCacheLoading.collectAsState()
+    val cachedProjects by viewModel.cachedProjects.collectAsState()
+    val isLoadingProjects by viewModel.isLoadingProjects.collectAsState()
     var showFolderDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showShortcutsDialog by remember { mutableStateOf(false) }
     var isSidebarVisible by remember { mutableStateOf(false) } // Changed from true to false so sidebar is folded by default
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+
+    // Load cached projects when screen is first shown
+    LaunchedEffect(Unit) {
+        viewModel.loadCachedProjects()
+    }
+
+    // Debug logging for cached projects state
+    LaunchedEffect(cachedProjects, isLoadingProjects) {
+        Logger.ui.info { "CachedProjects state changed: ${cachedProjects.size} projects, isLoading: $isLoadingProjects" }
+        cachedProjects.forEach { project ->
+            Logger.ui.info { "Project: ${project.folderName} at ${project.folderPath}" }
+        }
+    }
 
     // Handle export overlay animation
     val exportOverlayAlpha by animateFloatAsState(
@@ -324,37 +344,53 @@ fun PhotoGridScreen(
                 }
 
                 state.photos.isEmpty() -> {
-                    // Empty state with instructions
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(24.dp)
+                    // Empty state with cached projects or instructions
+                    if (cachedProjects.isNotEmpty()) {
+                        // Show cached projects
+                        CachedProjectsScreen(
+                            cachedProjects = cachedProjects,
+                            isLoading = isLoadingProjects,
+                            onProjectSelected = { project ->
+                                viewModel.loadCachedProject(project)
+                            },
+                            onProjectDeleted = { project ->
+                                viewModel.deleteCachedProject(project)
+                            },
+                            onOpenNewFolder = { showFolderDialog = true }
+                        )
+                    } else {
+                        // Original empty state with instructions
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                "Foto-Filter",
-                                style = MaterialTheme.typography.headlineLarge
-                            )
-
-                            Text(
-                                "Select a folder of photos to begin filtering",
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-
-                            Spacer(Modifier.height(16.dp))
-
                             Column(
-                                horizontalAlignment = Alignment.Start,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(24.dp)
                             ) {
-                                Text("Keyboard Shortcuts:", fontWeight = FontWeight.Bold)
-                                Text("K or Space: Keep photo")
-                                Text("D or Delete: Discard photo")
-                                Text("U: Undecide (reset status)")
-                                Text("← →: Navigate between photos")
-                                Text("E: Export kept photos")
+                                Text(
+                                    "Foto-Filter",
+                                    style = MaterialTheme.typography.headlineLarge
+                                )
+
+                                Text(
+                                    "Select a folder of photos to begin filtering",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+
+                                Spacer(Modifier.height(16.dp))
+
+                                Column(
+                                    horizontalAlignment = Alignment.Start,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Keyboard Shortcuts:", fontWeight = FontWeight.Bold)
+                                    Text("K or Space: Keep photo")
+                                    Text("D or Delete: Discard photo")
+                                    Text("U: Undecide (reset status)")
+                                    Text("← →: Navigate between photos")
+                                    Text("E: Export kept photos")
+                                }
                             }
                         }
                     }
@@ -1087,5 +1123,195 @@ fun ZoomableImage(
                 },
             contentScale = ContentScale.Fit
         )
+    }
+}
+
+@Composable
+fun CachedProjectsScreen(
+    cachedProjects: List<CachedProject>,
+    isLoading: Boolean,
+    onProjectSelected: (CachedProject) -> Unit,
+    onProjectDeleted: (CachedProject) -> Unit,
+    onOpenNewFolder: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        Text(
+            "Foto-Filter",
+            style = MaterialTheme.typography.headlineLarge
+        )
+
+        Text(
+            "Recent Projects",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        if (isLoading) {
+            CircularProgressIndicator()
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)
+            ) {
+                items(cachedProjects) { project ->
+                    CachedProjectCard(
+                        project = project,
+                        onProjectSelected = { onProjectSelected(project) },
+                        onProjectDeleted = { onProjectDeleted(project) }
+                    )
+                }
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledTonalButton(
+                onClick = onOpenNewFolder,
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
+            ) {
+                Text("Open New Folder", style = MaterialTheme.typography.titleMedium)
+            }
+
+            if (cachedProjects.isNotEmpty()) {
+                Text(
+                    "or select a recent project above",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun CachedProjectCard(
+    project: CachedProject,
+    onProjectSelected: () -> Unit,
+    onProjectDeleted: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onProjectSelected() },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = project.folderName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = project.folderPath,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StatusChip(
+                        count = project.keptPhotos,
+                        label = "Kept",
+                        color = Color(0xFF2E7D32)
+                    )
+                    StatusChip(
+                        count = project.discardedPhotos,
+                        label = "Discarded",
+                        color = Color(0xFFC62828)
+                    )
+                    StatusChip(
+                        count = project.remainingPhotos,
+                        label = "Remaining",
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                Text(
+                    text = "Last accessed: ${formatLastAccessed(project.lastAccessed)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            IconButton(
+                onClick = onProjectDeleted,
+                colors = IconButtonDefaults.iconButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Delete Project"
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusChip(
+    count: Int,
+    label: String,
+    color: Color
+) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = color.copy(alpha = 0.1f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = count.toString(),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = color.copy(alpha = 0.8f)
+            )
+        }
+    }
+}
+
+private fun formatLastAccessed(timestamp: Long): String {
+    val now = System.currentTimeMillis()
+    val diffMillis = now - timestamp
+    val diffDays = diffMillis / (24 * 60 * 60 * 1000)
+
+    return when {
+        diffDays == 0L -> "Today"
+        diffDays == 1L -> "Yesterday"
+        diffDays < 7 -> "$diffDays days ago"
+        diffDays < 30 -> "${diffDays / 7} weeks ago"
+        else -> "${diffDays / 30} months ago"
     }
 }

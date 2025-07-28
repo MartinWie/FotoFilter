@@ -11,7 +11,9 @@ import models.PhotoStatus
 import models.PhotoLibrary
 import services.FileService
 import services.SelectionPersistenceService
+import services.CachedProject
 import utils.ImageUtils
+import utils.Logger
 
 // Simplified ViewModel that directly uses FileService instead of repository pattern
 class FotoFilterViewModel {
@@ -25,6 +27,13 @@ class FotoFilterViewModel {
     // Cache loading state - separate from initial loading
     private val _isCacheLoading = MutableStateFlow(false)
     val isCacheLoading: StateFlow<Boolean> = _isCacheLoading.asStateFlow()
+
+    // Cached projects state
+    private val _cachedProjects = MutableStateFlow<List<CachedProject>>(emptyList())
+    val cachedProjects: StateFlow<List<CachedProject>> = _cachedProjects.asStateFlow()
+
+    private val _isLoadingProjects = MutableStateFlow(false)
+    val isLoadingProjects: StateFlow<Boolean> = _isLoadingProjects.asStateFlow()
 
     private val fileService = FileService()
     private val selectionPersistenceService = SelectionPersistenceService()
@@ -207,5 +216,55 @@ class FotoFilterViewModel {
 
         // Only clear state, keep cache and selections for potential reuse
         _state.value = PhotoLibrary()
+    }
+
+    /**
+     * Load list of cached projects
+     */
+    fun loadCachedProjects() {
+        viewModelScope.launch {
+            _isLoadingProjects.value = true
+            try {
+                Logger.viewModel.info { "Starting to load cached projects..." }
+                val projects = selectionPersistenceService.listCachedProjects()
+                Logger.viewModel.info { "Retrieved ${projects.size} cached projects from service" }
+                _cachedProjects.value = projects
+                Logger.viewModel.info { "Updated cachedProjects state with ${projects.size} projects" }
+            } catch (e: Exception) {
+                Logger.viewModel.error(e) { "Error loading cached projects" }
+                _cachedProjects.value = emptyList()
+            } finally {
+                _isLoadingProjects.value = false
+            }
+        }
+    }
+
+    /**
+     * Delete a cached project
+     */
+    fun deleteCachedProject(project: CachedProject) {
+        viewModelScope.launch {
+            try {
+                selectionPersistenceService.deleteCachedProject(project.folderPath)
+                // Refresh the list
+                loadCachedProjects()
+            } catch (e: Exception) {
+                Logger.viewModel.error(e) { "Error deleting cached project: ${project.folderName}" }
+            }
+        }
+    }
+
+    /**
+     * Load a cached project
+     */
+    fun loadCachedProject(project: CachedProject) {
+        viewModelScope.launch {
+            try {
+                // Use the existing preload method which will restore selections
+                loadPhotosWithPreload(project.folderPath)
+            } catch (e: Exception) {
+                Logger.viewModel.error(e) { "Error loading cached project: ${project.folderName}" }
+            }
+        }
     }
 }
