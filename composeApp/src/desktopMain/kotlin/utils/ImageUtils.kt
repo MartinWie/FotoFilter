@@ -18,6 +18,11 @@ object ImageUtils {
 
     private val thumbnailCacheService = ThumbnailCacheService()
 
+    init {
+        // Set up automatic cache cleanup on app shutdown
+        thumbnailCacheService.setupShutdownHook()
+    }
+
     /**
      * Import folder: Generate all thumbnails and previews on disk
      */
@@ -104,4 +109,6 @@ object ImageUtils {
     fun getCacheSizeMB(): Double = thumbnailCacheService.getCacheSizeMB()
     fun cleanupDiskCache() = thumbnailCacheService.cleanupCache()
     fun clearDiskCache() = thumbnailCacheService.clearCache()
+    fun cleanupExportedPhotos(photos: List<Photo>) = thumbnailCacheService.cleanupPhotosCache(photos)
+    fun setupCacheCleanup() = thumbnailCacheService.setupShutdownHook()
 }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import models.PhotoStatus
 import models.PhotoLibrary
 import services.FileService
+import services.SelectionPersistenceService
 import utils.ImageUtils
 
 // Simplified ViewModel that directly uses FileService instead of repository pattern
@@ -21,7 +22,12 @@ class FotoFilterViewModel {
     private val _importProgress = MutableStateFlow<Pair<Int, Int>?>(null)
     val importProgress: StateFlow<Pair<Int, Int>?> = _importProgress.asStateFlow()
 
+    // Cache loading state - separate from initial loading
+    private val _isCacheLoading = MutableStateFlow(false)
+    val isCacheLoading: StateFlow<Boolean> = _isCacheLoading.asStateFlow()
+
     private val fileService = FileService()
+    private val selectionPersistenceService = SelectionPersistenceService()
     private val viewModelScope = CoroutineScope(Dispatchers.Default)
 
     suspend fun loadPhotos(folderPath: String) {
@@ -72,31 +78,56 @@ class FotoFilterViewModel {
     }
 
     /**
-     * Load photos with full preloading
+     * Load photos with full preloading and restore saved selections
      */
     suspend fun loadPhotosWithPreload(folderPath: String) {
         _state.value = _state.value.copy(isLoading = true)
+        _isCacheLoading.value = true
         _importProgress.value = Pair(0, 0)
 
         try {
             // First scan the folder
             val photos = fileService.scanFolder(folderPath)
+            println("=== VIEWMODEL DEBUG ===")
+            println("Initial photos loaded: ${photos.size}")
+            println("Photos with status (before restore): ${photos.count { it.status != PhotoStatus.UNDECIDED }}")
+
+            // Restore saved selections
+            val photosWithSelections = selectionPersistenceService.loadSelections(folderPath, photos)
+            println("Photos with status (after restore): ${photosWithSelections.count { it.status != PhotoStatus.UNDECIDED }}")
+
+            // Debug: show first few photos and their status
+            photosWithSelections.take(5).forEach { photo ->
+                println("Photo: ${photo.fileName} -> Status: ${photo.status}")
+            }
+
+            // Update state with photos immediately so UI can show them
             _state.value = _state.value.copy(
-                photos = photos,
+                photos = photosWithSelections,
                 folderPath = folderPath,
-                selectedIndex = 0
+                selectedIndex = 0,
+                isLoading = false // Photos are loaded, now just caching
             )
 
-            // Preload ALL images with progress tracking
-            ImageUtils.importFolder(photos) { current, total ->
+            // Force UI update by triggering state flow emission
+            println("State updated with ${_state.value.photos.size} photos")
+            println("State photos with selections: ${_state.value.photos.count { it.status != PhotoStatus.UNDECIDED }}")
+            println("=== END VIEWMODEL DEBUG ===")
+
+            // Preload ALL images with progress tracking in background
+            ImageUtils.importFolder(photosWithSelections) { current, total ->
                 _importProgress.value = Pair(current, total)
             }
 
+            // Clear both progress and cache loading states
             _importProgress.value = null
-            _state.value = _state.value.copy(isLoading = false)
+            _isCacheLoading.value = false
+            println("Cache loading completed and state updated")
         } catch (e: Exception) {
             _importProgress.value = null
+            _isCacheLoading.value = false
             _state.value = _state.value.copy(isLoading = false)
+            println("Cache loading failed: ${e.message}")
         }
     }
 
@@ -131,6 +162,14 @@ class FotoFilterViewModel {
         updatedPhotos[currentState.selectedIndex] = currentPhoto.copy(status = status)
 
         _state.value = currentState.copy(photos = updatedPhotos)
+
+        // Auto-save selections after each change (only if folderPath is not null)
+        viewModelScope.launch {
+            currentState.folderPath?.let { folderPath ->
+                selectionPersistenceService.saveSelections(folderPath, updatedPhotos)
+            }
+        }
+
         nextPhoto() // Auto-advance
     }
 
@@ -159,6 +198,12 @@ class FotoFilterViewModel {
                     fileService.exportPhotos(photosToExport, destinationPath)
                     _state.value = _state.value.copy(isExporting = false, exportCompleted = true)
 
+                    // Clean up cache and selections after successful export (only if folderPath is not null)
+                    ImageUtils.cleanupExportedPhotos(_state.value.photos)
+                    _state.value.folderPath?.let { folderPath ->
+                        selectionPersistenceService.deleteSelections(folderPath)
+                    }
+
                     delay(3000)
                     resetToStartScreen()
                 } else {
@@ -171,6 +216,12 @@ class FotoFilterViewModel {
     }
 
     private fun resetToStartScreen() {
+        // Clean up old selection files periodically
+        viewModelScope.launch {
+            selectionPersistenceService.cleanupOldSelections()
+        }
+
+        // Only clear state, keep cache and selections for potential reuse
         _state.value = PhotoLibrary()
     }
 }

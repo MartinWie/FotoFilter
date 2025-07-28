@@ -59,6 +59,7 @@ fun PhotoGridScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val importProgress by viewModel.importProgress.collectAsState()
+    val isCacheLoading by viewModel.isCacheLoading.collectAsState()
     var showFolderDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showShortcutsDialog by remember { mutableStateOf(false) }
@@ -176,6 +177,29 @@ fun PhotoGridScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelMedium
                             )
+                        }
+
+                        // Cache loading indicator when building cache
+                        if (isCacheLoading) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.background(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                                    MaterialTheme.shapes.small
+                                ).padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "Building cache...",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
 
                         FilledTonalButton(
@@ -577,19 +601,13 @@ fun LargePhotoPreview(photo: Photo) {
                 modifier = Modifier.fillMaxSize()
             )
         } ?: run {
-            // Placeholder while loading
+            // Minimal placeholder - no loading indicator since images load so fast from cache
             Box(
-                modifier = Modifier.fillMaxSize().background(Color.Gray),
+                modifier = Modifier.fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(color = Color.White)
-                Text(
-                    text = "Loading Image...",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = Color.White,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 60.dp)
-                )
+                // Just show a subtle background, no spinning indicator
             }
         }
 
@@ -695,6 +713,7 @@ fun PhotoGrid(
     var lastScrollTime by remember { mutableStateOf(0L) }
     var isScrolling by remember { mutableStateOf(false) }
     var lastWindowCenter by remember { mutableStateOf(-1) }
+    var scrollResetJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     // Continuously update sliding window based on current position
     LaunchedEffect(selectedIndex) {
@@ -718,34 +737,40 @@ fun PhotoGrid(
         verticalArrangement = Arrangement.spacedBy(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier.onPointerEvent(PointerEventType.Scroll) {
-            // Detect fast scrolling to trigger memory management
             val currentTime = System.currentTimeMillis()
             val timeDiff = currentTime - lastScrollTime
 
+            // Cancel previous reset job
+            scrollResetJob?.cancel()
+
+            // Mark as scrolling
             isScrolling = true
             lastScrollTime = currentTime
 
-            // If scrolling fast, trigger emergency cleanup
-            if (timeDiff < 100) {
+            // Only trigger emergency cleanup for extremely fast scrolling
+            if (timeDiff < 50) { // Reduced threshold for more aggressive detection
                 ImageUtils.handleFastScrolling(photos, selectedIndex)
-            } else {
-                // During normal scrolling, update window more frequently
+            }
+
+            // Less aggressive window updates during scroll
+            // Only update window when scrolling has slowed down or position changed significantly
+            if (timeDiff > 150) { // Only update if scroll has slowed
                 val windowCenter = selectedIndex
-                if (kotlin.math.abs(windowCenter - lastWindowCenter) > 5) {
+                if (kotlin.math.abs(windowCenter - lastWindowCenter) > 8) { // Increased threshold
                     ImageUtils.updateSlidingWindow(photos, windowCenter, isScrolling = true)
                     lastWindowCenter = windowCenter
                 }
             }
 
-            // Reset scrolling state after delay
-            coroutineScope.launch {
-                kotlinx.coroutines.delay(200)
+            // Reset scrolling state with longer delay for smoother experience
+            scrollResetJob = coroutineScope.launch {
+                kotlinx.coroutines.delay(400) // Increased delay
                 isScrolling = false
             }
         }
     ) {
         itemsIndexed(photos) { index, photo ->
-            OptimizedPhotoThumbnail(
+            SmoothPhotoThumbnail(
                 photo = photo,
                 isSelected = index == selectedIndex,
                 isScrolling = isScrolling,
@@ -756,7 +781,7 @@ fun PhotoGrid(
 }
 
 @Composable
-fun OptimizedPhotoThumbnail(
+fun SmoothPhotoThumbnail(
     photo: Photo,
     isSelected: Boolean,
     isScrolling: Boolean,
@@ -764,18 +789,41 @@ fun OptimizedPhotoThumbnail(
 ) {
     var imageBitmap by remember(photo.id) { mutableStateOf<ImageBitmap?>(null) }
     var isLoading by remember(photo.id) { mutableStateOf(false) }
+    var hasTriedLoad by remember(photo.id) { mutableStateOf(false) }
 
-    // Only load image if not scrolling fast or if it's selected
+    // More permissive loading - load unless scrolling very fast
     LaunchedEffect(photo.id, isScrolling) {
-        if (!isScrolling || isSelected) {
+        if (!hasTriedLoad && (!isScrolling || isSelected)) {
+            hasTriedLoad = true
             isLoading = true
             try {
                 imageBitmap = ImageUtils.getThumbnail(photo)
             } catch (e: Exception) {
-                // Emergency cleanup on error
-                ImageUtils.emergencyCleanup()
+                // Only emergency cleanup on critical errors
+                if (e.message?.contains("OutOfMemory") == true) {
+                    ImageUtils.emergencyCleanup()
+                }
             } finally {
                 isLoading = false
+            }
+        }
+    }
+
+    // Keep trying to load when scrolling stops
+    LaunchedEffect(isScrolling) {
+        if (!isScrolling && imageBitmap == null && !isLoading) {
+            kotlinx.coroutines.delay(100) // Small delay to ensure scrolling has truly stopped
+            if (!isScrolling) { // Double-check
+                isLoading = true
+                try {
+                    imageBitmap = ImageUtils.getThumbnail(photo)
+                } catch (e: Exception) {
+                    if (e.message?.contains("OutOfMemory") == true) {
+                        ImageUtils.emergencyCleanup()
+                    }
+                } finally {
+                    isLoading = false
+                }
             }
         }
     }
@@ -809,29 +857,47 @@ fun OptimizedPhotoThumbnail(
                     contentScale = ContentScale.Crop
                 )
             }
-            isLoading || isScrolling -> {
-                // Show loading indicator or placeholder during scroll
+            isLoading -> {
+                // Show subtle loading for better perceived performance
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isLoading && !isScrolling) {
+                    if (!isScrolling) { // Only show spinner when not scrolling
                         CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                         )
                     }
                 }
             }
             else -> {
-                // Fallback empty state
+                // Placeholder state - more visually appealing
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                )
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // Show a subtle file icon instead of empty space
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                                MaterialTheme.shapes.small
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "📷",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
             }
         }
 

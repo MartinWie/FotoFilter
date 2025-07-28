@@ -24,7 +24,7 @@ import java.util.concurrent.Semaphore
 class ThumbnailCacheService {
     private val cacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
     private val thumbnailSize = 100 // Even smaller thumbnails to reduce memory
-    private val previewSize = 900   // Smaller previews for better memory management
+    private val previewSize = 1200   // Smaller previews for better memory management
 
     // Sliding window cache to track what's currently needed
     private val slidingWindowCache = mutableSetOf<String>()
@@ -399,8 +399,42 @@ class ThumbnailCacheService {
      * Clear all cache
      */
     fun clearCache() {
-        cacheDir.deleteRecursively()
-        cacheDir.mkdirs()
+        try {
+            cacheDir.deleteRecursively()
+            cacheDir.mkdirs()
+            println("Cache cleared successfully")
+        } catch (e: Exception) {
+            println("Error clearing cache: ${e.message}")
+        }
+    }
+
+    /**
+     * Cleanup cache on app shutdown - REMOVED: Keep cache persistent
+     */
+    fun setupShutdownHook() {
+        // No longer cleaning cache on shutdown to maintain persistence
+        Runtime.getRuntime().addShutdownHook(Thread {
+            println("App shutting down - cache preserved for next session")
+        })
+    }
+
+    /**
+     * Clean up cache for specific photos (useful after export)
+     */
+    fun cleanupPhotosCache(photos: List<Photo>) {
+        try {
+            var deletedCount = 0
+            photos.forEach { photo ->
+                val thumbnailFile = getThumbnailCacheFile(photo)
+                val previewFile = getPreviewCacheFile(photo)
+
+                if (thumbnailFile.exists() && thumbnailFile.delete()) deletedCount++
+                if (previewFile.exists() && previewFile.delete()) deletedCount++
+            }
+            println("Cleaned up cache for ${photos.size} photos ($deletedCount files deleted)")
+        } catch (e: Exception) {
+            println("Error cleaning up photos cache: ${e.message}")
+        }
     }
 
     /**

@@ -3,6 +3,7 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 plugins {
     kotlin("multiplatform") version "1.9.23"
     id("org.jetbrains.compose") version "1.6.2"
+    kotlin("plugin.serialization") version "1.9.23"
 }
 
 kotlin {
@@ -16,6 +17,7 @@ kotlin {
                 implementation(compose.foundation)
                 implementation(compose.material3)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
             }
         }
 
