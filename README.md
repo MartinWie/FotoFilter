@@ -17,6 +17,8 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
+- List projects in cache on main/start window and so the user can click on them to continue or remove it from cache
+- Make sure exportin only clear cache for exported project
 - Add icon to app and figure out how ot make it executable
 - Mac menu (change mainkt and the about page) 
 - Shortcut for sidebar toggle
