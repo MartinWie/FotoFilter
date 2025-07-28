@@ -17,10 +17,9 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
-- Bug: Cache and thumbnails are separated form each other in some constellations one is removed without the other
 - Add icon to app and figure out how ot make it executable
 - Mac menu (change mainkt and the about page)
-- Go back to main window option
+- Go back to main window option and general look at main page and see how to improve
 - Figure out how to disable logging with bundled application
 - Shortcut for sidebar toggle
 - Fix zoom (drag to change current area in view)

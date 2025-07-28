@@ -25,7 +25,8 @@ data class FolderSelections(
     val lastAccessed: Long,
     val selections: List<PhotoSelection>,
     val totalPhotos: Int, // Add total photo count
-    val thumbnailHashes: List<String> = emptyList() // Track thumbnail hashes for cleanup
+    val thumbnailHashes: List<String> = emptyList(), // Track thumbnail hashes for cleanup
+    val cacheVersion: Int = 2 // Add version for future migrations
 )
 
 /**
@@ -110,9 +111,32 @@ actual class SelectionPersistenceService {
                 )
             }
 
-            // Generate thumbnail hashes for cleanup tracking
-            val thumbnailHashes = photos.map { photo ->
-                generateFileHash(photo.rawPath, File(photo.rawPath))
+            // Preserve existing thumbnail hashes and only add new ones
+            val existingThumbnailHashes = try {
+                val selectionFile = getSelectionFile(folderPath)
+                if (selectionFile.exists()) {
+                    val jsonString = selectionFile.readText()
+                    val existingSelections = json.decodeFromString<FolderSelections>(jsonString)
+                    existingSelections.thumbnailHashes
+                } else {
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                Logger.persistenceService.debug(e) { "Could not load existing thumbnail hashes, will regenerate all" }
+                emptyList()
+            }
+
+            // Generate thumbnail hashes for cleanup tracking - use same logic as ThumbnailCacheService
+            val newThumbnailHashes = if (existingThumbnailHashes.isNotEmpty()) {
+                // If we have existing hashes, preserve them (don't regenerate)
+                existingThumbnailHashes
+            } else {
+                // Only generate new hashes if we don't have any (first time saving this project)
+                photos.map { photo ->
+                    // Use same path logic as ThumbnailCacheService: prefer JPEG, fallback to RAW
+                    val path = photo.jpegPath ?: photo.rawPath
+                    generateFileHash(path, File(path))
+                }
             }
 
             val folderSelections = FolderSelections(
@@ -120,7 +144,7 @@ actual class SelectionPersistenceService {
                 lastAccessed = System.currentTimeMillis(),
                 selections = selections,
                 totalPhotos = photos.size,
-                thumbnailHashes = thumbnailHashes
+                thumbnailHashes = newThumbnailHashes
             )
 
             val selectionFile = getSelectionFile(folderPath)
@@ -128,7 +152,7 @@ actual class SelectionPersistenceService {
             val jsonString = json.encodeToString(folderSelections)
             selectionFile.writeText(jsonString)
 
-            Logger.persistenceService.info { "Saved ${photos.size} photo selections for folder: $folderPath" }
+            Logger.persistenceService.info { "Saved ${photos.size} photo selections for folder: $folderPath (preserved ${newThumbnailHashes.size} thumbnail hashes)" }
         } catch (e: Exception) {
             Logger.persistenceService.error(e) { "Error saving selections for folder: $folderPath" }
         }
@@ -205,14 +229,24 @@ actual class SelectionPersistenceService {
         try {
             val cutoffTime = System.currentTimeMillis() - (maxAgeDays * 24 * 60 * 60 * 1000L)
             var deletedCount = 0
+            val thumbnailCacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
 
             persistenceDir.listFiles()?.forEach { file ->
-                if (file.isFile && file.name.endsWith(".json")) {
+                if (file.isFile && file.name.endsWith(".selections.json")) {
                     try {
                         val jsonString = file.readText()
                         val folderSelections = json.decodeFromString<FolderSelections>(jsonString)
 
                         if (folderSelections.lastAccessed < cutoffTime) {
+                            // Clean up associated thumbnails before deleting selection file
+                            folderSelections.thumbnailHashes.forEach { hash ->
+                                val thumbnailFile = File(thumbnailCacheDir, "thumb_${hash}.jpg")
+                                val previewFile = File(thumbnailCacheDir, "preview_${hash}.jpg")
+
+                                thumbnailFile.takeIf { it.exists() }?.delete()
+                                previewFile.takeIf { it.exists() }?.delete()
+                            }
+
                             file.delete()
                             deletedCount++
                         }
@@ -225,10 +259,139 @@ actual class SelectionPersistenceService {
             }
 
             if (deletedCount > 0) {
-                Logger.persistenceService.info { "Cleaned up $deletedCount old selection files" }
+                Logger.persistenceService.info { "Cleaned up $deletedCount old selection files and their thumbnails" }
             }
+
+            // Also clean up orphaned thumbnails that don't belong to any project
+            cleanupOrphanedThumbnails()
+
         } catch (e: Exception) {
             Logger.persistenceService.error(e) { "Error cleaning up old selections" }
+        }
+    }
+
+    /**
+     * Clean up orphaned thumbnails that don't belong to any cached project
+     */
+    private suspend fun cleanupOrphanedThumbnails() = withContext(Dispatchers.IO) {
+        try {
+            val thumbnailCacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
+            if (!thumbnailCacheDir.exists()) return@withContext
+
+            // Collect all valid project folder names from cached projects
+            val validProjectFolders = mutableSetOf<String>()
+
+            persistenceDir.listFiles()?.forEach { file ->
+                if (file.isFile && file.name.endsWith(".selections.json")) {
+                    try {
+                        val jsonString = file.readText()
+                        val folderSelections = json.decodeFromString<FolderSelections>(jsonString)
+
+                        // Generate the same safe folder name that ThumbnailCacheService uses
+                        val safeName = folderSelections.folderPath
+                            .replace("/", "_")
+                            .replace("\\", "_")
+                            .replace(":", "_")
+                            .replace(" ", "_")
+                            .take(100)
+
+                        validProjectFolders.add(safeName)
+                        Logger.persistenceService.debug { "Added valid project folder: $safeName for project: ${folderSelections.folderPath}" }
+                    } catch (e: Exception) {
+                        Logger.persistenceService.debug(e) { "Error reading project file for orphan cleanup: ${file.name}" }
+                    }
+                }
+            }
+
+            Logger.persistenceService.debug { "Total valid project folders: ${validProjectFolders.size}" }
+
+            // Clean up orphaned project folders and any remaining flat files
+            var orphanedCount = 0
+            thumbnailCacheDir.listFiles()?.forEach { fileOrFolder ->
+                when {
+                    fileOrFolder.isDirectory -> {
+                        // This is a project folder - check if it's valid
+                        if (fileOrFolder.name !in validProjectFolders) {
+                            Logger.persistenceService.debug { "Deleting orphaned project folder: ${fileOrFolder.name}" }
+                            val deletedFiles = fileOrFolder.listFiles()?.size ?: 0
+                            fileOrFolder.deleteRecursively()
+                            orphanedCount += deletedFiles
+                        }
+                    }
+                    fileOrFolder.isFile && (fileOrFolder.name.startsWith("thumb_") || fileOrFolder.name.startsWith("preview_")) -> {
+                        // This is an old flat file - clean it up since we now use project folders
+                        Logger.persistenceService.debug { "Deleting legacy flat thumbnail file: ${fileOrFolder.name}" }
+                        fileOrFolder.delete()
+                        orphanedCount++
+                    }
+                }
+            }
+
+            if (orphanedCount > 0) {
+                Logger.persistenceService.info { "Cleaned up $orphanedCount orphaned thumbnail files and folders" }
+            } else {
+                Logger.persistenceService.debug { "No orphaned thumbnails found" }
+            }
+
+        } catch (e: Exception) {
+            Logger.persistenceService.error(e) { "Error cleaning up orphaned thumbnails" }
+        }
+    }
+
+    /**
+     * Validate and repair cache consistency between selections and thumbnails
+     */
+    actual suspend fun validateAndRepairCache() = withContext(Dispatchers.IO) {
+        try {
+            Logger.persistenceService.info { "Starting cache validation and repair..." }
+
+            var repairedProjects = 0
+            val thumbnailCacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
+
+            persistenceDir.listFiles()?.forEach { file ->
+                if (file.isFile && file.name.endsWith(".selections.json")) {
+                    try {
+                        val jsonString = file.readText()
+                        val folderSelections = json.decodeFromString<FolderSelections>(jsonString)
+
+                        // Check if this is an old cache format without thumbnail tracking
+                        if (folderSelections.thumbnailHashes.isEmpty() && folderSelections.selections.isNotEmpty()) {
+                            Logger.persistenceService.info { "Repairing project cache: ${folderSelections.folderPath}" }
+
+                            // We need to regenerate thumbnail hashes, but we only have RAW paths in selections
+                            // We need to find the corresponding photos to get the correct JPEG/RAW logic
+                            // For repair, we'll use the selection's photoPath as-is since that's what we have
+                            val newThumbnailHashes = folderSelections.selections.map { selection ->
+                                generateFileHash(selection.photoPath, File(selection.photoPath))
+                            }
+
+                            // Update the cache file with thumbnail hashes
+                            val updatedFolderSelections = folderSelections.copy(
+                                thumbnailHashes = newThumbnailHashes,
+                                cacheVersion = 2
+                            )
+
+                            val updatedJsonString = json.encodeToString(updatedFolderSelections)
+                            file.writeText(updatedJsonString)
+
+                            repairedProjects++
+                        }
+
+                    } catch (e: Exception) {
+                        Logger.persistenceService.error(e) { "Error repairing cache file: ${file.name}" }
+                    }
+                }
+            }
+
+            if (repairedProjects > 0) {
+                Logger.persistenceService.info { "Repaired $repairedProjects project cache files" }
+            }
+
+            // Clean up orphaned thumbnails after repair
+            cleanupOrphanedThumbnails()
+
+        } catch (e: Exception) {
+            Logger.persistenceService.error(e) { "Error during cache validation and repair" }
         }
     }
 

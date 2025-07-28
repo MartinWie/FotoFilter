@@ -26,16 +26,16 @@ object ImageUtils {
     /**
      * Import folder: Generate all thumbnails and previews on disk
      */
-    suspend fun importFolder(photos: List<Photo>, onProgress: (Int, Int) -> Unit = { _, _ -> }) {
-        thumbnailCacheService.importFolder(photos, onProgress)
+    suspend fun importFolder(photos: List<Photo>, folderPath: String, onProgress: (Int, Int) -> Unit = { _, _ -> }) {
+        thumbnailCacheService.importFolder(photos, folderPath, onProgress)
     }
 
-    suspend fun getThumbnail(photo: Photo): ImageBitmap? = withContext(Dispatchers.IO) {
+    suspend fun getThumbnail(photo: Photo, folderPath: String): ImageBitmap? = withContext(Dispatchers.IO) {
         // Check immediate cache first
         immediateCache[photo.id]?.let { return@withContext it }
 
         // Load from disk cache (very fast)
-        val thumbnail = thumbnailCacheService.getThumbnail(photo)
+        val thumbnail = thumbnailCacheService.getThumbnail(photo, folderPath)
 
         // Add to immediate cache only
         if (thumbnail != null) {
@@ -50,21 +50,21 @@ object ImageUtils {
         thumbnail
     }
 
-    suspend fun getPreview(photo: Photo): ImageBitmap? = withContext(Dispatchers.IO) {
+    suspend fun getPreview(photo: Photo, folderPath: String): ImageBitmap? = withContext(Dispatchers.IO) {
         // Always load previews from disk to save memory
-        thumbnailCacheService.getPreview(photo)
+        thumbnailCacheService.getPreview(photo, folderPath)
     }
 
     /**
      * Sliding window preloading - called when user scrolls or navigates
      */
-    fun updateSlidingWindow(photos: List<Photo>, currentIndex: Int, isScrolling: Boolean = false) {
+    fun updateSlidingWindow(photos: List<Photo>, folderPath: String, currentIndex: Int, isScrolling: Boolean = false) {
         GlobalScope.launch(Dispatchers.IO) {
             try {
                 val windowSize = if (isScrolling) 15 else 25 // Smaller window when scrolling fast
 
                 // Update sliding window for thumbnails
-                thumbnailCacheService.preloadSlidingWindow(photos, currentIndex, windowSize)
+                thumbnailCacheService.preloadSlidingWindow(photos, folderPath, currentIndex, windowSize)
 
                 // Clear memory cache when scrolling to prevent heap errors
                 if (isScrolling) {
@@ -81,15 +81,15 @@ object ImageUtils {
     /**
      * Preload images around current position - called on photo selection
      */
-    fun preloadImagesAround(photos: List<Photo>, currentIndex: Int, range: Int = 5) {
-        updateSlidingWindow(photos, currentIndex, isScrolling = false)
+    fun preloadImagesAround(photos: List<Photo>, folderPath: String, currentIndex: Int, range: Int = 5) {
+        updateSlidingWindow(photos, folderPath, currentIndex, isScrolling = false)
     }
 
     /**
      * Handle fast scrolling - called when user scrolls quickly through grid
      */
-    fun handleFastScrolling(photos: List<Photo>, currentIndex: Int) {
-        updateSlidingWindow(photos, currentIndex, isScrolling = true)
+    fun handleFastScrolling(photos: List<Photo>, folderPath: String, currentIndex: Int) {
+        updateSlidingWindow(photos, folderPath, currentIndex, isScrolling = true)
     }
 
     /**
@@ -109,6 +109,7 @@ object ImageUtils {
     fun getCacheSizeMB(): Double = thumbnailCacheService.getCacheSizeMB()
     fun cleanupDiskCache() = thumbnailCacheService.cleanupCache()
     fun clearDiskCache() = thumbnailCacheService.clearCache()
-    fun cleanupExportedPhotos(photos: List<Photo>) = thumbnailCacheService.cleanupPhotosCache(photos)
+    fun cleanupExportedPhotos(photos: List<Photo>, folderPath: String) = thumbnailCacheService.cleanupPhotosCache(photos, folderPath)
+    fun cleanupProjectCache(folderPath: String) = thumbnailCacheService.cleanupProjectCache(folderPath)
     fun setupCacheCleanup() = thumbnailCacheService.setupShutdownHook()
 }

@@ -73,7 +73,7 @@ class FotoFilterViewModel {
                 )
 
                 // Then generate thumbnails and previews on disk
-                ImageUtils.importFolder(photos) { current, total ->
+                ImageUtils.importFolder(photos, folderPath) { current, total ->
                     _importProgress.value = Pair(current, total)
                 }
 
@@ -110,7 +110,7 @@ class FotoFilterViewModel {
             )
 
             // Preload ALL images with progress tracking in background
-            ImageUtils.importFolder(photosWithSelections) { current, total ->
+            ImageUtils.importFolder(photosWithSelections, folderPath) { current, total ->
                 _importProgress.value = Pair(current, total)
             }
 
@@ -130,7 +130,9 @@ class FotoFilterViewModel {
             _state.value = currentState.copy(selectedIndex = index)
 
             // Trigger preloading of adjacent images for smooth navigation
-            ImageUtils.preloadImagesAround(currentState.photos, index)
+            currentState.folderPath?.let { folderPath ->
+                ImageUtils.preloadImagesAround(currentState.photos, folderPath, index)
+            }
         }
     }
 
@@ -192,8 +194,8 @@ class FotoFilterViewModel {
                     _state.value = _state.value.copy(isExporting = false, exportCompleted = true)
 
                     // Clean up cache and selections after successful export (only if folderPath is not null)
-                    ImageUtils.cleanupExportedPhotos(_state.value.photos)
                     _state.value.folderPath?.let { folderPath ->
+                        ImageUtils.cleanupExportedPhotos(_state.value.photos, folderPath)
                         selectionPersistenceService.deleteSelections(folderPath)
                     }
 
@@ -229,6 +231,10 @@ class FotoFilterViewModel {
             _isLoadingProjects.value = true
             try {
                 Logger.viewModel.info { "Starting to load cached projects..." }
+
+                // First, validate and repair cache consistency
+                selectionPersistenceService.validateAndRepairCache()
+
                 val projects = selectionPersistenceService.listCachedProjects()
                 Logger.viewModel.info { "Retrieved ${projects.size} cached projects from service" }
                 _cachedProjects.value = projects

@@ -23,8 +23,8 @@ import java.util.concurrent.Semaphore
 import utils.Logger
 
 class ThumbnailCacheService {
-    private val cacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
-    private val thumbnailSize = 100 // Even smaller thumbnails to reduce memory
+    private val baseCacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
+    private val thumbnailSize = 200 // Even smaller thumbnails to reduce memory
     private val previewSize = 1200   // Smaller previews for better memory management
 
     // Sliding window cache to track what's currently needed
@@ -32,14 +32,14 @@ class ThumbnailCacheService {
     private val maxSlidingWindowSize = 50
 
     init {
-        // Ensure cache directory exists
-        cacheDir.mkdirs()
+        // Ensure base cache directory exists
+        baseCacheDir.mkdirs()
     }
 
     /**
      * Import process: Generate all thumbnails and previews for a folder (MEMORY-OPTIMIZED PARALLEL)
      */
-    suspend fun importFolder(photos: List<Photo>, onProgress: (Int, Int) -> Unit = { _, _ -> }) = withContext(Dispatchers.IO) {
+    suspend fun importFolder(photos: List<Photo>, folderPath: String, onProgress: (Int, Int) -> Unit = { _, _ -> }) = withContext(Dispatchers.IO) {
         if (photos.isEmpty()) return@withContext
 
         val totalPhotos = photos.size
@@ -48,7 +48,7 @@ class ThumbnailCacheService {
 
         val batchSize = maxOf(1, totalPhotos / maxConcurrency)
 
-        Logger.cacheService.info { "Starting memory-optimized parallel import with $maxConcurrency threads, batch size: $batchSize" }
+        Logger.cacheService.info { "Starting memory-optimized parallel import for project: $folderPath with $maxConcurrency threads, batch size: $batchSize" }
 
         // Process in smaller chunks to avoid memory overflow
         val chunks = photos.chunked(batchSize)
@@ -62,15 +62,15 @@ class ThumbnailCacheService {
                     semaphore.acquire()
                     try {
                         // Skip if already cached to save memory
-                        val thumbnailFile = getThumbnailCacheFile(photo)
-                        val previewFile = getPreviewCacheFile(photo)
+                        val thumbnailFile = getThumbnailCacheFile(photo, folderPath)
+                        val previewFile = getPreviewCacheFile(photo, folderPath)
 
                         if (!thumbnailFile.exists()) {
-                            generateThumbnailCacheOptimized(photo)
+                            generateThumbnailCacheOptimized(photo, folderPath)
                         }
 
                         if (!previewFile.exists()) {
-                            generatePreviewCacheOptimized(photo)
+                            generatePreviewCacheOptimized(photo, folderPath)
                         }
 
                         // Update progress
@@ -97,13 +97,13 @@ class ThumbnailCacheService {
             Thread.sleep(50) // Brief pause to let GC complete
         }
 
-        Logger.cacheService.info { "Memory-optimized parallel import completed. Processed $totalPhotos photos." }
+        Logger.cacheService.info { "Memory-optimized parallel import completed for project: $folderPath. Processed $totalPhotos photos." }
     }
 
     /**
      * Sliding window preloading: preload thumbnails in a window around current position
      */
-    suspend fun preloadSlidingWindow(photos: List<Photo>, centerIndex: Int, windowSize: Int = 40) = withContext(Dispatchers.IO) {
+    suspend fun preloadSlidingWindow(photos: List<Photo>, folderPath: String, centerIndex: Int, windowSize: Int = 40) = withContext(Dispatchers.IO) {
         if (photos.isEmpty()) return@withContext
 
         val startIndex = maxOf(0, centerIndex - windowSize)
@@ -118,10 +118,10 @@ class ThumbnailCacheService {
             newWindow.add(photoId)
 
             // Only generate if not already cached on disk
-            val thumbnailFile = getThumbnailCacheFile(photos[i])
+            val thumbnailFile = getThumbnailCacheFile(photos[i], folderPath)
             if (!thumbnailFile.exists()) {
                 try {
-                    generateThumbnailCache(photos[i])
+                    generateThumbnailCache(photos[i], folderPath)
                 } catch (e: Exception) {
                     Logger.cacheService.debug(e) { "Error preloading thumbnail for ${photos[i].fileName}" }
                 }
@@ -133,10 +133,10 @@ class ThumbnailCacheService {
         slidingWindowCache.addAll(newWindow)
 
         // Preload more aggressive neighbor previews
-        preloadImmediatePreviews(photos, centerIndex)
+        preloadImmediatePreviews(photos, folderPath, centerIndex)
     }
 
-    private suspend fun preloadImmediatePreviews(photos: List<Photo>, centerIndex: Int) = withContext(Dispatchers.IO) {
+    private suspend fun preloadImmediatePreviews(photos: List<Photo>, folderPath: String, centerIndex: Int) = withContext(Dispatchers.IO) {
         // Preload previews for current and more neighbors (7 total)
         val previewIndices = listOf(
             centerIndex - 3, centerIndex - 2, centerIndex - 1,
@@ -146,11 +146,11 @@ class ThumbnailCacheService {
 
         previewIndices.forEach { index ->
             val photo = photos[index]
-            val previewFile = getPreviewCacheFile(photo)
+            val previewFile = getPreviewCacheFile(photo, folderPath)
 
             if (!previewFile.exists()) {
                 try {
-                    generatePreviewCache(photo)
+                    generatePreviewCache(photo, folderPath)
                 } catch (e: Exception) {
                     Logger.cacheService.debug(e) { "Error preloading preview for ${photo.fileName}" }
                 }
@@ -161,8 +161,8 @@ class ThumbnailCacheService {
     /**
      * Get thumbnail from disk cache or generate if not exists
      */
-    suspend fun getThumbnail(photo: Photo): ImageBitmap? = withContext(Dispatchers.IO) {
-        val cacheFile = getThumbnailCacheFile(photo)
+    suspend fun getThumbnail(photo: Photo, folderPath: String): ImageBitmap? = withContext(Dispatchers.IO) {
+        val cacheFile = getThumbnailCacheFile(photo, folderPath)
 
         if (cacheFile.exists()) {
             // Load from disk cache
@@ -176,14 +176,14 @@ class ThumbnailCacheService {
         }
 
         // Generate and cache thumbnail
-        return@withContext generateThumbnailCache(photo)
+        return@withContext generateThumbnailCache(photo, folderPath)
     }
 
     /**
      * Get preview from disk cache or generate if not exists
      */
-    suspend fun getPreview(photo: Photo): ImageBitmap? = withContext(Dispatchers.IO) {
-        val cacheFile = getPreviewCacheFile(photo)
+    suspend fun getPreview(photo: Photo, folderPath: String): ImageBitmap? = withContext(Dispatchers.IO) {
+        val cacheFile = getPreviewCacheFile(photo, folderPath)
 
         if (cacheFile.exists()) {
             // Load from disk cache
@@ -197,16 +197,16 @@ class ThumbnailCacheService {
         }
 
         // Generate and cache preview
-        return@withContext generatePreviewCache(photo)
+        return@withContext generatePreviewCache(photo, folderPath)
     }
 
-    private fun generateThumbnailCache(photo: Photo): ImageBitmap? {
+    private fun generateThumbnailCache(photo: Photo, folderPath: String): ImageBitmap? {
         try {
             val originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.rawPath))
                 ?: return null
 
             val thumbnail = resizeImage(originalImage, thumbnailSize)
-            val cacheFile = getThumbnailCacheFile(photo)
+            val cacheFile = getThumbnailCacheFile(photo, folderPath)
 
             // Save to disk
             cacheFile.parentFile?.mkdirs()
@@ -221,13 +221,13 @@ class ThumbnailCacheService {
         }
     }
 
-    private fun generatePreviewCache(photo: Photo): ImageBitmap? {
+    private fun generatePreviewCache(photo: Photo, folderPath: String): ImageBitmap? {
         try {
             val originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.rawPath))
                 ?: return null
 
             val preview = resizeImage(originalImage, previewSize)
-            val cacheFile = getPreviewCacheFile(photo)
+            val cacheFile = getPreviewCacheFile(photo, folderPath)
 
             // Save to disk
             cacheFile.parentFile?.mkdirs()
@@ -242,14 +242,16 @@ class ThumbnailCacheService {
         }
     }
 
-    private fun getThumbnailCacheFile(photo: Photo): File {
+    private fun getThumbnailCacheFile(photo: Photo, folderPath: String): File {
+        val projectDir = getProjectCacheDir(folderPath)
         val hash = generateFileHash(photo)
-        return File(cacheDir, "thumb_${hash}.jpg")
+        return File(projectDir, "thumb_${hash}.jpg")
     }
 
-    private fun getPreviewCacheFile(photo: Photo): File {
+    private fun getPreviewCacheFile(photo: Photo, folderPath: String): File {
+        val projectDir = getProjectCacheDir(folderPath)
         val hash = generateFileHash(photo)
-        return File(cacheDir, "preview_${hash}.jpg")
+        return File(projectDir, "preview_${hash}.jpg")
     }
 
     private fun generateFileHash(photo: Photo): String {
@@ -376,7 +378,7 @@ class ThumbnailCacheService {
     fun cleanupCache(maxAgeHours: Int = 24 * 7) { // Default: 1 week
         val cutoffTime = System.currentTimeMillis() - (maxAgeHours * 60 * 60 * 1000)
 
-        cacheDir.listFiles()?.forEach { file ->
+        baseCacheDir.listFiles()?.forEach { file ->
             if (file.lastModified() < cutoffTime) {
                 file.delete()
             }
@@ -387,7 +389,7 @@ class ThumbnailCacheService {
      * Get cache size in MB
      */
     fun getCacheSizeMB(): Double {
-        val totalBytes = cacheDir.walkTopDown()
+        val totalBytes = baseCacheDir.walkTopDown()
             .filter { it.isFile }
             .map { it.length() }
             .sum()
@@ -399,8 +401,8 @@ class ThumbnailCacheService {
      */
     fun clearCache() {
         try {
-            cacheDir.deleteRecursively()
-            cacheDir.mkdirs()
+            baseCacheDir.deleteRecursively()
+            baseCacheDir.mkdirs()
             Logger.cacheService.info { "Cache cleared successfully" }
         } catch (e: Exception) {
             Logger.cacheService.error(e) { "Error clearing cache" }
@@ -420,12 +422,12 @@ class ThumbnailCacheService {
     /**
      * Clean up cache for specific photos (useful after export)
      */
-    fun cleanupPhotosCache(photos: List<Photo>) {
+    fun cleanupPhotosCache(photos: List<Photo>, folderPath: String) {
         try {
             var deletedCount = 0
             photos.forEach { photo ->
-                val thumbnailFile = getThumbnailCacheFile(photo)
-                val previewFile = getPreviewCacheFile(photo)
+                val thumbnailFile = getThumbnailCacheFile(photo, folderPath)
+                val previewFile = getPreviewCacheFile(photo, folderPath)
 
                 if (thumbnailFile.exists() && thumbnailFile.delete()) deletedCount++
                 if (previewFile.exists() && previewFile.delete()) deletedCount++
@@ -437,9 +439,25 @@ class ThumbnailCacheService {
     }
 
     /**
+     * Clean up cache for a specific project
+     */
+    fun cleanupProjectCache(folderPath: String) {
+        try {
+            val projectDir = getProjectCacheDir(folderPath)
+            if (projectDir.exists()) {
+                val deletedCount = projectDir.listFiles()?.size ?: 0
+                projectDir.deleteRecursively()
+                Logger.cacheService.info { "Cleaned up project cache for $folderPath ($deletedCount files deleted)" }
+            }
+        } catch (e: Exception) {
+            Logger.cacheService.error(e) { "Error cleaning up project cache for $folderPath" }
+        }
+    }
+
+    /**
      * Memory-optimized thumbnail generation that doesn't return ImageBitmap
      */
-    private fun generateThumbnailCacheOptimized(photo: Photo): Boolean {
+    private fun generateThumbnailCacheOptimized(photo: Photo, folderPath: String): Boolean {
         var originalImage: BufferedImage? = null
         var thumbnail: BufferedImage? = null
 
@@ -448,7 +466,7 @@ class ThumbnailCacheService {
                 ?: return false
 
             thumbnail = resizeImage(originalImage, thumbnailSize)
-            val cacheFile = getThumbnailCacheFile(photo)
+            val cacheFile = getThumbnailCacheFile(photo, folderPath)
 
             // Save to disk immediately and don't keep in memory
             cacheFile.parentFile?.mkdirs()
@@ -470,7 +488,7 @@ class ThumbnailCacheService {
     /**
      * Memory-optimized preview generation that doesn't return ImageBitmap
      */
-    private fun generatePreviewCacheOptimized(photo: Photo): Boolean {
+    private fun generatePreviewCacheOptimized(photo: Photo, folderPath: String): Boolean {
         var originalImage: BufferedImage? = null
         var preview: BufferedImage? = null
 
@@ -479,7 +497,7 @@ class ThumbnailCacheService {
                 ?: return false
 
             preview = resizeImage(originalImage, previewSize)
-            val cacheFile = getPreviewCacheFile(photo)
+            val cacheFile = getPreviewCacheFile(photo, folderPath)
 
             // Save to disk immediately and don't keep in memory
             cacheFile.parentFile?.mkdirs()
@@ -496,5 +514,22 @@ class ThumbnailCacheService {
             originalImage = null
             preview = null
         }
+    }
+
+    /**
+     * Get project-specific cache directory
+     */
+    private fun getProjectCacheDir(folderPath: String): File {
+        // Create a safe folder name from the project path
+        val safeName = folderPath
+            .replace("/", "_")
+            .replace("\\", "_")
+            .replace(":", "_")
+            .replace(" ", "_")
+            .take(100) // Limit length
+
+        val projectDir = File(baseCacheDir, safeName)
+        projectDir.mkdirs()
+        return projectDir
     }
 }

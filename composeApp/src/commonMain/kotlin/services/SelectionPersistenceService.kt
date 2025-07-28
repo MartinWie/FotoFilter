@@ -26,4 +26,5 @@ expect class SelectionPersistenceService() {
     fun getSelectionStorageMB(): Double
     suspend fun listCachedProjects(): List<CachedProject>
     suspend fun deleteCachedProject(folderPath: String)
+    suspend fun validateAndRepairCache()
 }

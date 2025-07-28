@@ -417,7 +417,9 @@ fun PhotoGridScreen(
                             // Large preview (left side)
                             Box(modifier = Modifier.weight(if (isSidebarVisible) 0.6f else 1f).fillMaxHeight().padding(end = 8.dp)) {
                                 state.selectedPhoto?.let { photo ->
-                                    LargePhotoPreview(photo = photo)
+                                    state.folderPath?.let { folderPath ->
+                                        LargePhotoPreview(photo = photo, folderPath = folderPath)
+                                    }
                                 }
                             }
 
@@ -432,6 +434,7 @@ fun PhotoGridScreen(
                                     Box(modifier = Modifier.fillMaxSize()) {
                                         PhotoGrid(
                                             photos = state.photos,
+                                            folderPath = state.folderPath ?: "",
                                             selectedIndex = state.selectedIndex,
                                             onPhotoClick = { index ->
                                                 viewModel.onPhotoSelected(index)
@@ -585,12 +588,12 @@ fun PhotoGridScreen(
 }
 
 @Composable
-fun LargePhotoPreview(photo: Photo) {
+fun LargePhotoPreview(photo: Photo, folderPath: String) {
     // Using optimized preview image loading with simplified ImageUtils
     var imageBitmap by remember(photo.id) { mutableStateOf<ImageBitmap?>(null) }
 
     LaunchedEffect(photo.id) {
-        imageBitmap = ImageUtils.getPreview(photo)
+        imageBitmap = ImageUtils.getPreview(photo, folderPath)
     }
 
     var scale by remember { mutableStateOf(1f) }
@@ -745,6 +748,7 @@ fun LargePhotoPreview(photo: Photo) {
 @Composable
 fun PhotoGrid(
     photos: List<Photo>,
+    folderPath: String,
     selectedIndex: Int,
     onPhotoClick: (Int) -> Unit
 ) {
@@ -773,6 +777,7 @@ fun PhotoGrid(
         itemsIndexed(photos) { index, photo ->
             SmoothPhotoThumbnail(
                 photo = photo,
+                folderPath = folderPath,
                 isSelected = index == selectedIndex,
                 isScrolling = isScrolling,
                 onClick = { onPhotoClick(index) }
@@ -784,6 +789,7 @@ fun PhotoGrid(
 @Composable
 fun SmoothPhotoThumbnail(
     photo: Photo,
+    folderPath: String,
     isSelected: Boolean,
     isScrolling: Boolean,
     onClick: () -> Unit
@@ -797,7 +803,7 @@ fun SmoothPhotoThumbnail(
             isLoading = true
             try {
                 // Always try to load the image, even during scrolling
-                imageBitmap = ImageUtils.getThumbnail(photo)
+                imageBitmap = ImageUtils.getThumbnail(photo, folderPath)
             } catch (e: Exception) {
                 // Only handle critical memory errors
                 if (e.message?.contains("OutOfMemory") == true) {
@@ -816,7 +822,7 @@ fun SmoothPhotoThumbnail(
             if (!isScrolling && imageBitmap == null) { // Double-check conditions
                 isLoading = true
                 try {
-                    imageBitmap = ImageUtils.getThumbnail(photo)
+                    imageBitmap = ImageUtils.getThumbnail(photo, folderPath)
                 } catch (e: Exception) {
                     // Handle errors silently for smoother UX
                 } finally {
