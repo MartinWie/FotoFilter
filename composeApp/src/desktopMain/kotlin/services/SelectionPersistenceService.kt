@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import java.io.File
+import utils.Logger
 
 @Serializable
 data class PhotoSelection(
@@ -66,45 +67,28 @@ actual class SelectionPersistenceService {
             val jsonString = json.encodeToString(folderSelections)
             selectionFile.writeText(jsonString)
 
-            println("Saved ${selections.size} photo selections for folder: $folderPath")
-            println("Selection file saved to: ${selectionFile.absolutePath}")
+            Logger.persistenceService.info { "Saved ${selections.size} photo selections for folder: $folderPath" }
         } catch (e: Exception) {
-            println("Error saving selections: ${e.message}")
-            e.printStackTrace()
+            Logger.persistenceService.error(e) { "Error saving selections for folder: $folderPath" }
         }
     }
 
     actual suspend fun loadSelections(folderPath: String, photos: List<Photo>): List<Photo> = withContext(Dispatchers.IO) {
         try {
             val selectionFile = getSelectionFile(folderPath)
-
-            println("=== LOADING SELECTIONS DEBUG ===")
-            println("Folder path: $folderPath")
-            println("Looking for selection file: ${selectionFile.absolutePath}")
-            println("File exists: ${selectionFile.exists()}")
+            Logger.persistenceService.debug { "Looking for selection file: ${selectionFile.absolutePath}" }
 
             if (!selectionFile.exists()) {
-                // List all files in the cache directory to see what's actually there
-                println("Files in cache directory:")
-                persistenceDir.listFiles()?.forEach { file ->
-                    println("  - ${file.name}")
-                }
-                println("No saved selections found for folder: $folderPath")
+                Logger.persistenceService.debug { "No saved selections found for folder: $folderPath" }
                 return@withContext photos
             }
 
             val jsonString = selectionFile.readText()
-            println("JSON content loaded: ${jsonString.take(200)}...") // Show first 200 chars
-
             val folderSelections = json.decodeFromString<FolderSelections>(jsonString)
-            println("Parsed ${folderSelections.selections.size} selections from file")
+            Logger.persistenceService.debug { "Parsed ${folderSelections.selections.size} selections from file" }
 
             // Create a map of saved selections by photo path
             val selectionMap = folderSelections.selections.associateBy { it.photoPath }
-            println("Selection map contains paths:")
-            selectionMap.keys.take(3).forEach { path ->
-                println("  - $path")
-            }
 
             // Apply saved selections to photos, but verify file hasn't changed
             var appliedCount = 0
@@ -113,9 +97,6 @@ actual class SelectionPersistenceService {
 
                 if (savedSelection != null) {
                     val file = File(photo.rawPath)
-                    println("Checking photo: ${photo.rawPath}")
-                    println("  Saved: lastModified=${savedSelection.lastModified}, size=${savedSelection.fileSize}")
-                    println("  Current: lastModified=${file.lastModified()}, size=${file.length()}")
 
                     // Only apply if file hasn't been modified since selection was saved
                     if (file.lastModified() == savedSelection.lastModified &&
@@ -128,11 +109,10 @@ actual class SelectionPersistenceService {
                         }
 
                         appliedCount++
-                        println("  Applied status: ${status}")
                         photo.copy(status = status)
                     } else {
                         // File has changed, reset to undecided
-                        println("  File has changed since selection was saved - resetting to UNDECIDED")
+                        Logger.persistenceService.debug { "File ${photo.fileName} has changed since selection was saved - resetting to UNDECIDED" }
                         photo.copy(status = PhotoStatus.UNDECIDED)
                     }
                 } else {
@@ -140,13 +120,10 @@ actual class SelectionPersistenceService {
                 }
             }
 
-            println("Applied $appliedCount selections out of ${selectionMap.size} saved selections")
-            println("=== END LOADING SELECTIONS DEBUG ===")
-
+            Logger.persistenceService.info { "Applied $appliedCount selections out of ${selectionMap.size} saved selections" }
             updatedPhotos
         } catch (e: Exception) {
-            println("Error loading selections: ${e.message}")
-            e.printStackTrace()
+            Logger.persistenceService.error(e) { "Error loading selections for folder: $folderPath" }
             photos
         }
     }
@@ -156,10 +133,10 @@ actual class SelectionPersistenceService {
             val selectionFile = getSelectionFile(folderPath)
             if (selectionFile.exists()) {
                 selectionFile.delete()
-                println("Deleted selections for folder: $folderPath")
+                Logger.persistenceService.info { "Deleted selections for folder: $folderPath" }
             }
         } catch (e: Exception) {
-            println("Error deleting selections: ${e.message}")
+            Logger.persistenceService.error(e) { "Error deleting selections for folder: $folderPath" }
         }
     }
 
@@ -187,10 +164,10 @@ actual class SelectionPersistenceService {
             }
 
             if (deletedCount > 0) {
-                println("Cleaned up $deletedCount old selection files")
+                Logger.persistenceService.info { "Cleaned up $deletedCount old selection files" }
             }
         } catch (e: Exception) {
-            println("Error cleaning up old selections: ${e.message}")
+            Logger.persistenceService.error(e) { "Error cleaning up old selections" }
         }
     }
 

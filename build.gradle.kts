@@ -18,6 +18,7 @@ kotlin {
                 implementation(compose.material3)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+                // Remove logging framework from commonMain - move to desktopMain only
             }
         }
 
@@ -31,6 +32,10 @@ kotlin {
                 implementation("io.coil-kt:coil:2.4.0")
                 // Add metadata-extractor for EXIF orientation handling
                 implementation("com.drewnoakes:metadata-extractor:2.19.0")
+                // Add SLF4J backend for logging
+                implementation("ch.qos.logback:logback-classic:1.4.11")
+                // Add logging framework
+                implementation("io.github.oshai:kotlin-logging-jvm:5.1.0")
             }
         }
     }

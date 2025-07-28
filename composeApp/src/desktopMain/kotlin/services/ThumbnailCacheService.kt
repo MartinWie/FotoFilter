@@ -20,6 +20,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Semaphore
+import utils.Logger
 
 class ThumbnailCacheService {
     private val cacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
@@ -47,7 +48,7 @@ class ThumbnailCacheService {
 
         val batchSize = maxOf(1, totalPhotos / maxConcurrency)
 
-        println("Starting memory-optimized parallel import with $maxConcurrency threads, batch size: $batchSize")
+        Logger.cacheService.info { "Starting memory-optimized parallel import with $maxConcurrency threads, batch size: $batchSize" }
 
         // Process in smaller chunks to avoid memory overflow
         val chunks = photos.chunked(batchSize)
@@ -82,7 +83,7 @@ class ThumbnailCacheService {
                         }
 
                     } catch (e: Exception) {
-                        println("Error processing ${photo.fileName}: ${e.message}")
+                        Logger.cacheService.warn(e) { "Error processing ${photo.fileName}" }
                         val completed = processedCount.incrementAndGet()
                         onProgress(completed, totalPhotos)
                     } finally {
@@ -96,7 +97,7 @@ class ThumbnailCacheService {
             Thread.sleep(50) // Brief pause to let GC complete
         }
 
-        println("Memory-optimized parallel import completed. Processed $totalPhotos photos.")
+        Logger.cacheService.info { "Memory-optimized parallel import completed. Processed $totalPhotos photos." }
     }
 
     /**
@@ -122,7 +123,7 @@ class ThumbnailCacheService {
                 try {
                     generateThumbnailCache(photos[i])
                 } catch (e: Exception) {
-                    println("Error preloading thumbnail for ${photos[i].fileName}: ${e.message}")
+                    Logger.cacheService.debug(e) { "Error preloading thumbnail for ${photos[i].fileName}" }
                 }
             }
         }
@@ -151,7 +152,7 @@ class ThumbnailCacheService {
                 try {
                     generatePreviewCache(photo)
                 } catch (e: Exception) {
-                    println("Error preloading preview for ${photo.fileName}: ${e.message}")
+                    Logger.cacheService.debug(e) { "Error preloading preview for ${photo.fileName}" }
                 }
             }
         }
@@ -169,7 +170,7 @@ class ThumbnailCacheService {
                 val bytes = cacheFile.readBytes()
                 return@withContext Image.makeFromEncoded(bytes).toComposeImageBitmap()
             } catch (e: Exception) {
-                println("Error loading cached thumbnail: ${e.message}")
+                Logger.cacheService.debug(e) { "Error loading cached thumbnail, regenerating" }
                 // Fall through to regenerate
             }
         }
@@ -190,7 +191,7 @@ class ThumbnailCacheService {
                 val bytes = cacheFile.readBytes()
                 return@withContext Image.makeFromEncoded(bytes).toComposeImageBitmap()
             } catch (e: Exception) {
-                println("Error loading cached preview: ${e.message}")
+                Logger.cacheService.debug(e) { "Error loading cached preview, regenerating" }
                 // Fall through to regenerate
             }
         }
@@ -215,7 +216,7 @@ class ThumbnailCacheService {
             val bytes = cacheFile.readBytes()
             return Image.makeFromEncoded(bytes).toComposeImageBitmap()
         } catch (e: Exception) {
-            println("Error generating thumbnail cache for ${photo.fileName}: ${e.message}")
+            Logger.cacheService.error(e) { "Error generating thumbnail cache for ${photo.fileName}" }
             return null
         }
     }
@@ -236,7 +237,7 @@ class ThumbnailCacheService {
             val bytes = cacheFile.readBytes()
             return Image.makeFromEncoded(bytes).toComposeImageBitmap()
         } catch (e: Exception) {
-            println("Error generating preview cache for ${photo.fileName}: ${e.message}")
+            Logger.cacheService.error(e) { "Error generating preview cache for ${photo.fileName}" }
             return null
         }
     }
@@ -400,9 +401,9 @@ class ThumbnailCacheService {
         try {
             cacheDir.deleteRecursively()
             cacheDir.mkdirs()
-            println("Cache cleared successfully")
+            Logger.cacheService.info { "Cache cleared successfully" }
         } catch (e: Exception) {
-            println("Error clearing cache: ${e.message}")
+            Logger.cacheService.error(e) { "Error clearing cache" }
         }
     }
 
@@ -412,7 +413,7 @@ class ThumbnailCacheService {
     fun setupShutdownHook() {
         // No longer cleaning cache on shutdown to maintain persistence
         Runtime.getRuntime().addShutdownHook(Thread {
-            println("App shutting down - cache preserved for next session")
+            Logger.cacheService.info { "App shutting down - cache preserved for next session" }
         })
     }
 
@@ -429,9 +430,9 @@ class ThumbnailCacheService {
                 if (thumbnailFile.exists() && thumbnailFile.delete()) deletedCount++
                 if (previewFile.exists() && previewFile.delete()) deletedCount++
             }
-            println("Cleaned up cache for ${photos.size} photos ($deletedCount files deleted)")
+            Logger.cacheService.info { "Cleaned up cache for ${photos.size} photos ($deletedCount files deleted)" }
         } catch (e: Exception) {
-            println("Error cleaning up photos cache: ${e.message}")
+            Logger.cacheService.error(e) { "Error cleaning up photos cache" }
         }
     }
 
@@ -455,7 +456,7 @@ class ThumbnailCacheService {
 
             return true
         } catch (e: Exception) {
-            println("Error generating thumbnail cache for ${photo.fileName}: ${e.message}")
+            Logger.cacheService.error(e) { "Error generating thumbnail cache for ${photo.fileName}" }
             return false
         } finally {
             // Explicitly clear references to help GC
@@ -486,7 +487,7 @@ class ThumbnailCacheService {
 
             return true
         } catch (e: Exception) {
-            println("Error generating preview cache for ${photo.fileName}: ${e.message}")
+            Logger.cacheService.error(e) { "Error generating preview cache for ${photo.fileName}" }
             return false
         } finally {
             // Explicitly clear references to help GC

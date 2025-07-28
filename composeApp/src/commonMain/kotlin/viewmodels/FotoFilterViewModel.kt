@@ -88,18 +88,9 @@ class FotoFilterViewModel {
         try {
             // First scan the folder
             val photos = fileService.scanFolder(folderPath)
-            println("=== VIEWMODEL DEBUG ===")
-            println("Initial photos loaded: ${photos.size}")
-            println("Photos with status (before restore): ${photos.count { it.status != PhotoStatus.UNDECIDED }}")
 
             // Restore saved selections
             val photosWithSelections = selectionPersistenceService.loadSelections(folderPath, photos)
-            println("Photos with status (after restore): ${photosWithSelections.count { it.status != PhotoStatus.UNDECIDED }}")
-
-            // Debug: show first few photos and their status
-            photosWithSelections.take(5).forEach { photo ->
-                println("Photo: ${photo.fileName} -> Status: ${photo.status}")
-            }
 
             // Update state with photos immediately so UI can show them
             _state.value = _state.value.copy(
@@ -109,11 +100,6 @@ class FotoFilterViewModel {
                 isLoading = false // Photos are loaded, now just caching
             )
 
-            // Force UI update by triggering state flow emission
-            println("State updated with ${_state.value.photos.size} photos")
-            println("State photos with selections: ${_state.value.photos.count { it.status != PhotoStatus.UNDECIDED }}")
-            println("=== END VIEWMODEL DEBUG ===")
-
             // Preload ALL images with progress tracking in background
             ImageUtils.importFolder(photosWithSelections) { current, total ->
                 _importProgress.value = Pair(current, total)
@@ -122,12 +108,10 @@ class FotoFilterViewModel {
             // Clear both progress and cache loading states
             _importProgress.value = null
             _isCacheLoading.value = false
-            println("Cache loading completed and state updated")
         } catch (e: Exception) {
             _importProgress.value = null
             _isCacheLoading.value = false
             _state.value = _state.value.copy(isLoading = false)
-            println("Cache loading failed: ${e.message}")
         }
     }
 

@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 import models.Photo
 import models.PhotoStatus
 import utils.ImageUtils
+import utils.Logger
 import viewmodels.FotoFilterViewModel
 import kotlin.math.max
 
@@ -762,7 +763,7 @@ fun SmoothPhotoThumbnail(
             } catch (e: Exception) {
                 // Only handle critical memory errors
                 if (e.message?.contains("OutOfMemory") == true) {
-                    println("Memory warning for ${photo.fileName}, will retry later")
+                    Logger.ui.warn { "Memory warning for ${photo.fileName}, will retry later" }
                 }
             } finally {
                 isLoading = false
