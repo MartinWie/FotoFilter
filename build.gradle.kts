@@ -49,6 +49,17 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "FotoFilter"
             packageVersion = "1.0.0"
+
+            // Configure app icon
+            macOS {
+                iconFile.set(project.file("composeApp/src/desktopMain/resources/icons/app-icon.icns"))
+            }
+            windows {
+                iconFile.set(project.file("composeApp/src/desktopMain/resources/icons/app-icon.ico"))
+            }
+            linux {
+                iconFile.set(project.file("composeApp/src/desktopMain/resources/icons/app-icon.png"))
+            }
         }
     }
 }

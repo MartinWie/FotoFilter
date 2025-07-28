@@ -17,8 +17,6 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
-- Add icon to app and figure out how ot make it executable
-- Mac menu (change mainkt and the about page)
 - Go back to main window option and general look at main page and see how to improve
 - Figure out how to disable logging with bundled application
 - Shortcut for sidebar toggle
@@ -46,14 +44,25 @@ TBD write me if you need help
    git clone https://github.com/MartinWie/FotoFilter.git
    cd fotofilter
    ```
-2. Build the application:
+2. Development and Build Options:
+
+   **Run in development:**
    ```
-   ./gradlew run
+   ./gradlew runDistributable
    ```
-3. Create a distributable package:
+   This will show your icon in the running application
+
+   **Create distributables:**
    ```
-   ./gradlew packageDmg
+   ./gradlew createDistributable
    ```
+   This creates platform-specific packages with your icon
+
+   **Create installers:**
+   ```
+   ./gradlew packageDistributionForCurrentOS
+   ```
+   This creates installer packages (.dmg, .msi, .deb) with your icon
 
 ## Usage
 
