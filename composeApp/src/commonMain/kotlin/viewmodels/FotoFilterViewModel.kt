@@ -214,8 +214,11 @@ class FotoFilterViewModel {
             selectionPersistenceService.cleanupOldSelections()
         }
 
-        // Only clear state, keep cache and selections for potential reuse
+        // Clear state and refresh cached projects list to reflect changes
         _state.value = PhotoLibrary()
+
+        // Refresh the cached projects list so UI shows updated state
+        loadCachedProjects()
     }
 
     /**

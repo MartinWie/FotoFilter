@@ -17,9 +17,7 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
-- Bug: After an export the cache is cleared, but the UI is not does not reflect the now finished project(simple reload)
-- Bug: When selecting a recent/cache project, after opening, we need to click on the pic again for the navigation/shortcuts to work
-- Make sure exportin only clear cache for exported project
+- Bug: Cache and thumbnails are separated form each other in some constellations one is removed without the other
 - Add icon to app and figure out how ot make it executable
 - Mac menu (change mainkt and the about page)
 - Go back to main window option

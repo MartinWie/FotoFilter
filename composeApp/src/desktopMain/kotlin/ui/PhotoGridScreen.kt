@@ -352,6 +352,8 @@ fun PhotoGridScreen(
                             isLoading = isLoadingProjects,
                             onProjectSelected = { project ->
                                 viewModel.loadCachedProject(project)
+                                // Request focus after loading project to ensure keyboard shortcuts work
+                                focusRequester.requestFocus()
                             },
                             onProjectDeleted = { project ->
                                 viewModel.deleteCachedProject(project)
