@@ -710,61 +710,23 @@ fun PhotoGrid(
     onPhotoClick: (Int) -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var lastScrollTime by remember { mutableStateOf(0L) }
     var isScrolling by remember { mutableStateOf(false) }
-    var lastWindowCenter by remember { mutableStateOf(-1) }
     var scrollResetJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
-    // Continuously update sliding window based on current position
-    LaunchedEffect(selectedIndex) {
-        // Update window immediately when selection changes
-        if (photos.isNotEmpty() && selectedIndex != lastWindowCenter) {
-            ImageUtils.updateSlidingWindow(photos, selectedIndex, isScrolling = false)
-            lastWindowCenter = selectedIndex
-        }
-    }
-
-    // Also update when scrolling stops
-    LaunchedEffect(isScrolling) {
-        if (!isScrolling && photos.isNotEmpty()) {
-            ImageUtils.updateSlidingWindow(photos, selectedIndex, isScrolling = false)
-        }
-    }
-
+    // Simplified scroll detection - only for very basic optimizations
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 160.dp),
         contentPadding = PaddingValues(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier.onPointerEvent(PointerEventType.Scroll) {
-            val currentTime = System.currentTimeMillis()
-            val timeDiff = currentTime - lastScrollTime
-
-            // Cancel previous reset job
+            // Much simpler scroll detection - just track if we're actively scrolling
             scrollResetJob?.cancel()
-
-            // Mark as scrolling
             isScrolling = true
-            lastScrollTime = currentTime
 
-            // Only trigger emergency cleanup for extremely fast scrolling
-            if (timeDiff < 50) { // Reduced threshold for more aggressive detection
-                ImageUtils.handleFastScrolling(photos, selectedIndex)
-            }
-
-            // Less aggressive window updates during scroll
-            // Only update window when scrolling has slowed down or position changed significantly
-            if (timeDiff > 150) { // Only update if scroll has slowed
-                val windowCenter = selectedIndex
-                if (kotlin.math.abs(windowCenter - lastWindowCenter) > 8) { // Increased threshold
-                    ImageUtils.updateSlidingWindow(photos, windowCenter, isScrolling = true)
-                    lastWindowCenter = windowCenter
-                }
-            }
-
-            // Reset scrolling state with longer delay for smoother experience
+            // Reset scrolling state with a short delay
             scrollResetJob = coroutineScope.launch {
-                kotlinx.coroutines.delay(400) // Increased delay
+                kotlinx.coroutines.delay(150) // Shorter delay for more responsive feel
                 isScrolling = false
             }
         }
@@ -789,19 +751,18 @@ fun SmoothPhotoThumbnail(
 ) {
     var imageBitmap by remember(photo.id) { mutableStateOf<ImageBitmap?>(null) }
     var isLoading by remember(photo.id) { mutableStateOf(false) }
-    var hasTriedLoad by remember(photo.id) { mutableStateOf(false) }
 
-    // More permissive loading - load unless scrolling very fast
-    LaunchedEffect(photo.id, isScrolling) {
-        if (!hasTriedLoad && (!isScrolling || isSelected)) {
-            hasTriedLoad = true
+    // Much more permissive loading strategy - always try to load unless actively scrolling very fast
+    LaunchedEffect(photo.id) {
+        if (imageBitmap == null && !isLoading) {
             isLoading = true
             try {
+                // Always try to load the image, even during scrolling
                 imageBitmap = ImageUtils.getThumbnail(photo)
             } catch (e: Exception) {
-                // Only emergency cleanup on critical errors
+                // Only handle critical memory errors
                 if (e.message?.contains("OutOfMemory") == true) {
-                    ImageUtils.emergencyCleanup()
+                    println("Memory warning for ${photo.fileName}, will retry later")
                 }
             } finally {
                 isLoading = false
@@ -809,18 +770,16 @@ fun SmoothPhotoThumbnail(
         }
     }
 
-    // Keep trying to load when scrolling stops
+    // Retry loading when scrolling stops, but only if image is still null
     LaunchedEffect(isScrolling) {
         if (!isScrolling && imageBitmap == null && !isLoading) {
-            kotlinx.coroutines.delay(100) // Small delay to ensure scrolling has truly stopped
-            if (!isScrolling) { // Double-check
+            kotlinx.coroutines.delay(50) // Very short delay
+            if (!isScrolling && imageBitmap == null) { // Double-check conditions
                 isLoading = true
                 try {
                     imageBitmap = ImageUtils.getThumbnail(photo)
                 } catch (e: Exception) {
-                    if (e.message?.contains("OutOfMemory") == true) {
-                        ImageUtils.emergencyCleanup()
-                    }
+                    // Handle errors silently for smoother UX
                 } finally {
                     isLoading = false
                 }
@@ -858,16 +817,17 @@ fun SmoothPhotoThumbnail(
                 )
             }
             isLoading -> {
-                // Show subtle loading for better perceived performance
+                // Minimal loading state to avoid visual interruptions
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (!isScrolling) { // Only show spinner when not scrolling
+                    // Only show loading spinner if not scrolling and item is selected or nearby
+                    if (!isScrolling && isSelected) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                         )
@@ -875,28 +835,20 @@ fun SmoothPhotoThumbnail(
                 }
             }
             else -> {
-                // Placeholder state - more visually appealing
+                // Clean placeholder state
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)),
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Show a subtle file icon instead of empty space
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .background(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                                MaterialTheme.shapes.small
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "📷",
-                            style = MaterialTheme.typography.bodySmall
+                    // Subtle placeholder icon
+                    Text(
+                        "📷",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
-                    }
+                    )
                 }
             }
         }
