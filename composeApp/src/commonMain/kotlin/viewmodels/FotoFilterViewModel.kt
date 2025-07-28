@@ -10,11 +10,16 @@ import kotlinx.coroutines.delay
 import models.PhotoStatus
 import models.PhotoLibrary
 import services.FileService
+import utils.ImageUtils
 
 // Simplified ViewModel that directly uses FileService instead of repository pattern
 class FotoFilterViewModel {
     private val _state = MutableStateFlow(PhotoLibrary())
     val state: StateFlow<PhotoLibrary> = _state.asStateFlow()
+
+    // Import progress state
+    private val _importProgress = MutableStateFlow<Pair<Int, Int>?>(null)
+    val importProgress: StateFlow<Pair<Int, Int>?> = _importProgress.asStateFlow()
 
     private val fileService = FileService()
     private val viewModelScope = CoroutineScope(Dispatchers.Default)
@@ -35,10 +40,73 @@ class FotoFilterViewModel {
         }
     }
 
+    /**
+     * Import folder: Generate disk cache for all photos
+     */
+    fun importFolder(folderPath: String) {
+        viewModelScope.launch {
+            try {
+                _state.value = _state.value.copy(isLoading = true)
+                _importProgress.value = Pair(0, 0)
+
+                // First scan the folder
+                val photos = fileService.scanFolder(folderPath)
+                _state.value = _state.value.copy(
+                    photos = photos,
+                    folderPath = folderPath,
+                    selectedIndex = 0
+                )
+
+                // Then generate thumbnails and previews on disk
+                ImageUtils.importFolder(photos) { current, total ->
+                    _importProgress.value = Pair(current, total)
+                }
+
+                _importProgress.value = null
+                _state.value = _state.value.copy(isLoading = false)
+            } catch (e: Exception) {
+                _importProgress.value = null
+                _state.value = _state.value.copy(isLoading = false)
+            }
+        }
+    }
+
+    /**
+     * Load photos with full preloading
+     */
+    suspend fun loadPhotosWithPreload(folderPath: String) {
+        _state.value = _state.value.copy(isLoading = true)
+        _importProgress.value = Pair(0, 0)
+
+        try {
+            // First scan the folder
+            val photos = fileService.scanFolder(folderPath)
+            _state.value = _state.value.copy(
+                photos = photos,
+                folderPath = folderPath,
+                selectedIndex = 0
+            )
+
+            // Preload ALL images with progress tracking
+            ImageUtils.importFolder(photos) { current, total ->
+                _importProgress.value = Pair(current, total)
+            }
+
+            _importProgress.value = null
+            _state.value = _state.value.copy(isLoading = false)
+        } catch (e: Exception) {
+            _importProgress.value = null
+            _state.value = _state.value.copy(isLoading = false)
+        }
+    }
+
     fun onPhotoSelected(index: Int) {
         val currentState = _state.value
         if (index != currentState.selectedIndex && index in 0 until currentState.photos.size) {
             _state.value = currentState.copy(selectedIndex = index)
+
+            // Trigger preloading of adjacent images for smooth navigation
+            ImageUtils.preloadImagesAround(currentState.photos, index)
         }
     }
 

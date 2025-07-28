@@ -51,7 +51,6 @@ import models.PhotoStatus
 import utils.ImageUtils
 import viewmodels.FotoFilterViewModel
 import kotlin.math.max
-import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,6 +58,7 @@ fun PhotoGridScreen(
     viewModel: FotoFilterViewModel = remember { FotoFilterViewModel() }
 ) {
     val state by viewModel.state.collectAsState()
+    val importProgress by viewModel.importProgress.collectAsState()
     var showFolderDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showShortcutsDialog by remember { mutableStateOf(false) }
@@ -107,7 +107,7 @@ fun PhotoGridScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             // Minimal top bar that's smaller when no photos are loaded
-            if (state.photos.isEmpty() && !state.isLoading) {
+            if (state.photos.isEmpty() && !state.isLoading && importProgress == null) {
                 // Ultra minimal header before folder selection
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
@@ -132,8 +132,8 @@ fun PhotoGridScreen(
                         }
                     }
                 }
-            } else {
-                // Standard toolbar when photos are loaded
+            } else if (importProgress == null) {
+                // Standard toolbar when photos are loaded and not importing
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
@@ -204,6 +204,85 @@ fun PhotoGridScreen(
             }
 
             when {
+                importProgress != null -> {
+                    // Full screen loading animation with progress
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .width(500.dp)
+                                .padding(32.dp),
+                            shape = MaterialTheme.shapes.large,
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 8.dp
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(40.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(24.dp)
+                            ) {
+                                Text(
+                                    "Processing Photos",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+
+                                val (current, total) = importProgress ?: (0 to 0)
+                                val progress = if (total > 0) current.toFloat() / total else 0f
+
+                                // Large circular progress indicator
+                                Box(
+                                    modifier = Modifier.size(120.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        progress = progress,
+                                        modifier = Modifier.fillMaxSize(),
+                                        strokeWidth = 8.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "${(progress * 100).toInt()}%",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                Text(
+                                    "Generating thumbnails and previews...",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Text(
+                                    "$current of $total photos processed",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                // Linear progress bar
+                                LinearProgressIndicator(
+                                    progress = progress,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp)
+                                        .clip(MaterialTheme.shapes.small),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+
+                                Text(
+                                    "This will make browsing much faster!",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+
                 state.isLoading -> {
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -214,7 +293,7 @@ fun PhotoGridScreen(
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             CircularProgressIndicator()
-                            Text("Loading photos...")
+                            Text("Scanning folder...")
                         }
                     }
                 }
@@ -394,7 +473,8 @@ fun PhotoGridScreen(
                 showFolderDialog = false
                 if (folderPath != null) {
                     coroutineScope.launch {
-                        viewModel.loadPhotos(folderPath)
+                        // Use the new preloading method instead of loadPhotos
+                        viewModel.loadPhotosWithPreload(folderPath)
                     }
                 }
                 // Request focus again after dialog closes
@@ -604,22 +684,71 @@ fun LargePhotoPreview(photo: Photo) {
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun PhotoGrid(
     photos: List<Photo>,
     selectedIndex: Int,
     onPhotoClick: (Int) -> Unit
 ) {
+    val coroutineScope = rememberCoroutineScope()
+    var lastScrollTime by remember { mutableStateOf(0L) }
+    var isScrolling by remember { mutableStateOf(false) }
+    var lastWindowCenter by remember { mutableStateOf(-1) }
+
+    // Continuously update sliding window based on current position
+    LaunchedEffect(selectedIndex) {
+        // Update window immediately when selection changes
+        if (photos.isNotEmpty() && selectedIndex != lastWindowCenter) {
+            ImageUtils.updateSlidingWindow(photos, selectedIndex, isScrolling = false)
+            lastWindowCenter = selectedIndex
+        }
+    }
+
+    // Also update when scrolling stops
+    LaunchedEffect(isScrolling) {
+        if (!isScrolling && photos.isNotEmpty()) {
+            ImageUtils.updateSlidingWindow(photos, selectedIndex, isScrolling = false)
+        }
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 160.dp),
         contentPadding = PaddingValues(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.onPointerEvent(PointerEventType.Scroll) {
+            // Detect fast scrolling to trigger memory management
+            val currentTime = System.currentTimeMillis()
+            val timeDiff = currentTime - lastScrollTime
+
+            isScrolling = true
+            lastScrollTime = currentTime
+
+            // If scrolling fast, trigger emergency cleanup
+            if (timeDiff < 100) {
+                ImageUtils.handleFastScrolling(photos, selectedIndex)
+            } else {
+                // During normal scrolling, update window more frequently
+                val windowCenter = selectedIndex
+                if (kotlin.math.abs(windowCenter - lastWindowCenter) > 5) {
+                    ImageUtils.updateSlidingWindow(photos, windowCenter, isScrolling = true)
+                    lastWindowCenter = windowCenter
+                }
+            }
+
+            // Reset scrolling state after delay
+            coroutineScope.launch {
+                kotlinx.coroutines.delay(200)
+                isScrolling = false
+            }
+        }
     ) {
         itemsIndexed(photos) { index, photo ->
-            PhotoThumbnail(
+            OptimizedPhotoThumbnail(
                 photo = photo,
                 isSelected = index == selectedIndex,
+                isScrolling = isScrolling,
                 onClick = { onPhotoClick(index) }
             )
         }
@@ -627,16 +756,28 @@ fun PhotoGrid(
 }
 
 @Composable
-fun PhotoThumbnail(
+fun OptimizedPhotoThumbnail(
     photo: Photo,
     isSelected: Boolean,
+    isScrolling: Boolean,
     onClick: () -> Unit
 ) {
-    // Use optimized thumbnail loading with simplified ImageUtils
     var imageBitmap by remember(photo.id) { mutableStateOf<ImageBitmap?>(null) }
+    var isLoading by remember(photo.id) { mutableStateOf(false) }
 
-    LaunchedEffect(photo.id) {
-        imageBitmap = ImageUtils.getThumbnail(photo)
+    // Only load image if not scrolling fast or if it's selected
+    LaunchedEffect(photo.id, isScrolling) {
+        if (!isScrolling || isSelected) {
+            isLoading = true
+            try {
+                imageBitmap = ImageUtils.getThumbnail(photo)
+            } catch (e: Exception) {
+                // Emergency cleanup on error
+                ImageUtils.emergencyCleanup()
+            } finally {
+                isLoading = false
+            }
+        }
     }
 
     Box(
@@ -652,73 +793,76 @@ fun PhotoThumbnail(
                 }
             )
             .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = when {
-                    isSelected -> MaterialTheme.colorScheme.primary
-                    photo.status == PhotoStatus.KEEP -> Color(0xFF2E7D32)
-                    photo.status == PhotoStatus.DISCARD -> Color(0xFFC62828)
-                    else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-                },
+                width = if (isSelected) 2.dp else 0.dp,
+                color = MaterialTheme.colorScheme.primary,
                 shape = MaterialTheme.shapes.small
             )
-            .clickable { onClick() }
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
     ) {
-        // Image or placeholder
-        imageBitmap?.let { bitmap ->
-            Image(
-                bitmap = bitmap,
-                contentDescription = "Photo Thumbnail",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-        } ?: run {
-            // Placeholder while loading
-            Box(
-                modifier = Modifier.fillMaxSize().background(Color.LightGray),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp
+        when {
+            imageBitmap != null -> {
+                Image(
+                    bitmap = imageBitmap!!,
+                    contentDescription = photo.fileName,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            isLoading || isScrolling -> {
+                // Show loading indicator or placeholder during scroll
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isLoading && !isScrolling) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                }
+            }
+            else -> {
+                // Fallback empty state
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
                 )
             }
         }
 
-        // Status icon in corner
-        when (photo.status) {
-            PhotoStatus.KEEP -> {
-                Surface(
-                    modifier = Modifier.size(24.dp).align(Alignment.TopEnd).padding(4.dp),
-                    shape = MaterialTheme.shapes.small,
-                    color = Color(0xFF2E7D32)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = "Kept",
-                            modifier = Modifier.size(16.dp),
-                            tint = Color.White
-                        )
-                    }
-                }
+        // Status indicator
+        if (photo.status != PhotoStatus.UNDECIDED) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(20.dp)
+                    .background(
+                        when (photo.status) {
+                            PhotoStatus.KEEP -> Color(0xFF1B5E20)
+                            PhotoStatus.DISCARD -> Color(0xFFB71C1C)
+                            else -> Color.Transparent
+                        },
+                        CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = when (photo.status) {
+                        PhotoStatus.KEEP -> Icons.Default.Check
+                        PhotoStatus.DISCARD -> Icons.Default.Close
+                        else -> Icons.Default.Check
+                    },
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(12.dp)
+                )
             }
-            PhotoStatus.DISCARD -> {
-                Surface(
-                    modifier = Modifier.size(24.dp).align(Alignment.TopEnd).padding(4.dp),
-                    shape = MaterialTheme.shapes.small,
-                    color = Color(0xFFC62828)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Discarded",
-                            modifier = Modifier.size(16.dp),
-                            tint = Color.White
-                        )
-                    }
-                }
-            }
-            else -> {}
         }
     }
 }

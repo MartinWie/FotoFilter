@@ -1,195 +1,107 @@
 package utils
 
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
-import kotlinx.coroutines.*
 import models.Photo
-import org.jetbrains.skia.Image
-import java.awt.image.BufferedImage
-import java.io.File
-import javax.imageio.ImageIO
-import java.awt.RenderingHints
+import services.ThumbnailCacheService
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
-import java.lang.ref.SoftReference
-import com.drew.imaging.ImageMetadataReader
-import com.drew.metadata.exif.ExifIFD0Directory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 
-/**
- * Optimized image utilities with memory management and lazy loading
- */
 object ImageUtils {
-    // Use SoftReference cache to allow GC to reclaim memory when needed
-    private val imageCache = ConcurrentHashMap<String, SoftReference<ImageBitmap>>(100)
+    // Very minimal in-memory cache - only for immediate display
+    private val immediateCache = ConcurrentHashMap<String, ImageBitmap>()
 
-    // Dedicated thread pool for image operations to prevent blocking UI
-    private val imageExecutor = Executors.newFixedThreadPool(2)
-    private val imageDispatcher = imageExecutor.asCoroutineDispatcher()
+    // Extremely small memory cache - just for current view
+    private const val MAX_IMMEDIATE_CACHE = 10  // Only immediate items in memory
 
-    // Maximum dimensions to prevent memory issues
-    private const val MAX_DIMENSION = 1200  // Reduced from 1920
-    private const val THUMBNAIL_SIZE = 200   // Reduced from 300
+    private val thumbnailCacheService = ThumbnailCacheService()
 
     /**
-     * Load an image with automatic caching and size optimization
+     * Import folder: Generate all thumbnails and previews on disk
      */
-    suspend fun loadImage(photo: Photo, isThumbnail: Boolean = false): ImageBitmap? = withContext(imageDispatcher) {
-        val path = photo.jpegPath ?: photo.rawPath
-        val cacheKey = if (isThumbnail) "$path-thumb" else path
+    suspend fun importFolder(photos: List<Photo>, onProgress: (Int, Int) -> Unit = { _, _ -> }) {
+        thumbnailCacheService.importFolder(photos, onProgress)
+    }
 
-        // Check cache first - handle SoftReference
-        imageCache[cacheKey]?.get()?.let { return@withContext it }
+    suspend fun getThumbnail(photo: Photo): ImageBitmap? = withContext(Dispatchers.IO) {
+        // Check immediate cache first
+        immediateCache[photo.id]?.let { return@withContext it }
 
-        try {
-            val file = File(path)
-            if (!file.exists()) return@withContext null
+        // Load from disk cache (very fast)
+        val thumbnail = thumbnailCacheService.getThumbnail(photo)
 
-            val originalImage = ImageIO.read(file) ?: return@withContext null
-
-            // Apply EXIF orientation
-            val orientedImage = applyExifOrientation(originalImage, getExifOrientation(file))
-
-            // Resize aggressively to save memory
-            val finalImage = if (isThumbnail) {
-                resizeImage(orientedImage, THUMBNAIL_SIZE)
-            } else {
-                resizeImage(orientedImage, MAX_DIMENSION)
+        // Add to immediate cache only
+        if (thumbnail != null) {
+            // Keep cache very small
+            if (immediateCache.size >= MAX_IMMEDIATE_CACHE) {
+                immediateCache.clear()
+                System.gc()
             }
+            immediateCache[photo.id] = thumbnail
+        }
 
-            val imageBitmap = convertToImageBitmap(finalImage)
+        thumbnail
+    }
 
-            // Cache using SoftReference - GC can reclaim if memory is low
-            imageCache[cacheKey] = SoftReference(imageBitmap)
+    suspend fun getPreview(photo: Photo): ImageBitmap? = withContext(Dispatchers.IO) {
+        // Always load previews from disk to save memory
+        thumbnailCacheService.getPreview(photo)
+    }
 
-            // Aggressive cache size management
-            if (imageCache.size > 50) {
-                cleanupCache()
+    /**
+     * Sliding window preloading - called when user scrolls or navigates
+     */
+    fun updateSlidingWindow(photos: List<Photo>, currentIndex: Int, isScrolling: Boolean = false) {
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                val windowSize = if (isScrolling) 15 else 25 // Smaller window when scrolling fast
+
+                // Update sliding window for thumbnails
+                thumbnailCacheService.preloadSlidingWindow(photos, currentIndex, windowSize)
+
+                // Clear memory cache when scrolling to prevent heap errors
+                if (isScrolling) {
+                    immediateCache.clear()
+                    System.gc()
+                }
+            } catch (e: Exception) {
+                // Emergency cleanup on any error
+                emergencyCleanup()
             }
-
-            imageBitmap
-        } catch (e: OutOfMemoryError) {
-            // Handle OOM by clearing cache and forcing GC
-            clearCache()
-            System.gc()
-            null
-        } catch (e: Exception) {
-            null
         }
     }
 
     /**
-     * Get thumbnail for a photo with aggressive caching
+     * Preload images around current position - called on photo selection
      */
-    suspend fun getThumbnail(photo: Photo): ImageBitmap? = loadImage(photo, true)
+    fun preloadImagesAround(photos: List<Photo>, currentIndex: Int, range: Int = 5) {
+        updateSlidingWindow(photos, currentIndex, isScrolling = false)
+    }
 
     /**
-     * Get full-size preview for a photo
+     * Handle fast scrolling - called when user scrolls quickly through grid
      */
-    suspend fun getPreview(photo: Photo): ImageBitmap? = loadImage(photo, false)
+    fun handleFastScrolling(photos: List<Photo>, currentIndex: Int) {
+        updateSlidingWindow(photos, currentIndex, isScrolling = true)
+    }
 
     /**
-     * Clear cache and force garbage collection
+     * Emergency memory cleanup
      */
-    fun clearCache() {
-        imageCache.clear()
+    fun emergencyCleanup() {
+        immediateCache.clear()
         System.gc()
-    }
-
-    /**
-     * Clean up cache by removing entries with cleared SoftReferences
-     */
-    private fun cleanupCache() {
-        val keysToRemove = mutableListOf<String>()
-        imageCache.forEach { (key, softRef) ->
-            if (softRef.get() == null) {
-                keysToRemove.add(key)
-            }
-        }
-        keysToRemove.forEach { imageCache.remove(it) }
-
-        // If still too large, remove oldest entries
-        if (imageCache.size > 30) {
-            val keysToRemoveMore = imageCache.keys.take(imageCache.size - 20)
-            keysToRemoveMore.forEach { imageCache.remove(it) }
-        }
-
-        System.gc() // Suggest garbage collection
-    }
-
-    private fun resizeImage(image: BufferedImage, maxDimension: Int): BufferedImage {
-        val width = image.width
-        val height = image.height
-
-        // Don't upscale and be more aggressive with downsizing
-        if (width <= maxDimension && height <= maxDimension) return image
-
-        val scale = minOf(maxDimension.toDouble() / width, maxDimension.toDouble() / height)
-        val newWidth = (width * scale).toInt()
-        val newHeight = (height * scale).toInt()
-
-        // Use TYPE_INT_RGB instead of original type to save memory
-        val resized = BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB)
-        val g2d = resized.createGraphics()
-
-        // Use faster interpolation for better performance
-        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED) // Changed from QUALITY to SPEED
-        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF) // Disabled for speed
-
-        g2d.drawImage(image, 0, 0, newWidth, newHeight, null)
-        g2d.dispose()
-
-        return resized
-    }
-
-    private fun getExifOrientation(file: File): Int {
-        return try {
-            val metadata = ImageMetadataReader.readMetadata(file)
-            val exifDirectory = metadata.getFirstDirectoryOfType(ExifIFD0Directory::class.java)
-            exifDirectory?.getInt(ExifIFD0Directory.TAG_ORIENTATION) ?: 1
-        } catch (e: Exception) {
-            1
+        // Force multiple garbage collections to free memory
+        repeat(3) {
+            System.gc()
+            Thread.sleep(50)
         }
     }
 
-    private fun applyExifOrientation(image: BufferedImage, orientation: Int): BufferedImage {
-        return when (orientation) {
-            3 -> rotateImage(image, 180.0)
-            6 -> rotateImage(image, 90.0)
-            8 -> rotateImage(image, -90.0)
-            else -> image
-        }
-    }
-
-    private fun rotateImage(image: BufferedImage, degrees: Double): BufferedImage {
-        val radians = Math.toRadians(degrees)
-        val sin = kotlin.math.abs(kotlin.math.sin(radians))
-        val cos = kotlin.math.abs(kotlin.math.cos(radians))
-
-        val newWidth = (image.width * cos + image.height * sin).toInt()
-        val newHeight = (image.width * sin + image.height * cos).toInt()
-
-        val rotated = BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB)
-        val g2d = rotated.createGraphics()
-
-        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-        g2d.translate(newWidth / 2, newHeight / 2)
-        g2d.rotate(radians)
-        g2d.drawImage(image, -image.width / 2, -image.height / 2, null)
-        g2d.dispose()
-
-        return rotated
-    }
-
-    private fun convertToImageBitmap(bufferedImage: BufferedImage): ImageBitmap {
-        return Image.makeFromEncoded(
-            bufferedImageToByteArray(bufferedImage)
-        ).toComposeImageBitmap()
-    }
-
-    private fun bufferedImageToByteArray(image: BufferedImage): ByteArray {
-        val baos = java.io.ByteArrayOutputStream()
-        ImageIO.write(image, "JPEG", baos) // Use JPEG instead of PNG for smaller file size
-        return baos.toByteArray()
-    }
+    // Cache management functions
+    fun getCacheSizeMB(): Double = thumbnailCacheService.getCacheSizeMB()
+    fun cleanupDiskCache() = thumbnailCacheService.cleanupCache()
+    fun clearDiskCache() = thumbnailCacheService.clearCache()
 }
