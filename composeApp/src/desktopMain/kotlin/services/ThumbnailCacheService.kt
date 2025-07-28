@@ -43,10 +43,8 @@ class ThumbnailCacheService {
 
         val totalPhotos = photos.size
         val processedCount = AtomicInteger(0)
-        val cpuCores = Runtime.getRuntime().availableProcessors()
+        val maxConcurrency = Runtime.getRuntime().availableProcessors()
 
-        // More conservative parallelism to prevent heap issues
-        val maxConcurrency = minOf(cpuCores, 4) // Limit to max 4 concurrent threads
         val batchSize = maxOf(1, totalPhotos / maxConcurrency)
 
         println("Starting memory-optimized parallel import with $maxConcurrency threads, batch size: $batchSize")
