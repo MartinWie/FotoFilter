@@ -18,7 +18,7 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 ### TODO's
 
 - Go back to main window option and general look at main page and see how to improve
-- Figure out how to disable logging with bundled application
+- Fix theming( folder selection dialog is light themed, even though the OS theme is dark, same with top bar)
 - Shortcut for sidebar toggle
 - Fix zoom (drag to change current area in view)
 - customize shortcuts in options
@@ -46,23 +46,25 @@ TBD write me if you need help
    ```
 2. Development and Build Options:
 
-   **Run in development:**
+   **Run in development (with full logging):**
    ```
    ./gradlew runDistributable
    ```
-   This will show your icon in the running application
+   This will show your icon in the running application and provide full debug logging to console
 
    **Create distributables:**
    ```
    ./gradlew createDistributable
    ```
-   This creates platform-specific packages with your icon
+   This creates platform-specific packages with your icon and minimal production logging
 
    **Create installers:**
    ```
    ./gradlew packageDistributionForCurrentOS
    ```
-   This creates installer packages (.dmg, .msi, .deb) with your icon
+   This creates installer packages (.dmg, .msi, .deb) with your icon and minimal production logging
+
+   **Note**: Development builds automatically use full logging (`logback-dev.xml`) while packaged distributions use minimal error-only logging (`logback.xml`) for a clean user experience.
 
 ## Usage
 

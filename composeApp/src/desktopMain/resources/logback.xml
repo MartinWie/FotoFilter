@@ -1,13 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- Console appender for development -->
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
-    <!-- File appender for production logs -->
+    <!-- File appender for production logs (errors only) -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${user.home}/.fotofilter/logs/fotofilter.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
@@ -19,15 +12,14 @@
         </encoder>
     </appender>
 
-    <!-- Set logging levels -->
-    <logger name="utils.ImageUtils" level="INFO"/>
-    <logger name="services.ThumbnailCacheService" level="INFO"/>
-    <logger name="services.SelectionPersistenceService" level="INFO"/>
-    <logger name="viewmodels.FotoFilterViewModel" level="INFO"/>
+    <!-- Set logging levels to ERROR only for production -->
+    <logger name="utils.ImageUtils" level="ERROR"/>
+    <logger name="services.ThumbnailCacheService" level="ERROR"/>
+    <logger name="services.SelectionPersistenceService" level="ERROR"/>
+    <logger name="viewmodels.FotoFilterViewModel" level="ERROR"/>
 
-    <!-- Root logger -->
-    <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
+    <!-- Root logger - only ERROR level, no console output -->
+    <root level="ERROR">
         <appender-ref ref="FILE"/>
     </root>
 </configuration>

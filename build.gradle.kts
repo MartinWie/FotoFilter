@@ -45,10 +45,15 @@ compose.desktop {
     application {
         mainClass = "de.fotofilter.MainKt"
 
+        // Add JVM args for development logging
+        jvmArgs += listOf(
+            "-Dlogback.configurationFile=composeApp/src/desktopMain/resources/logback-dev.xml"
+        )
+
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "FotoFilter"
-            packageVersion = "1.0.0"
+            packageVersion = "1.0.1"
 
             // Configure app icon
             macOS {
