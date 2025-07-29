@@ -23,9 +23,16 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 - Fix zoom (drag to change current area in view)
 - customize shortcuts in options
 - Add option to control image preview quality(make sure we use the JPEG's for the view)
-- Check about using preloadImages/try to optimize image loading
-- Faster start
+- build for windows
+- test on windows
+- build for linux
+- test on linux
+- setup pipelines to build on every push or version increase
 - When click on remaining only show remaining(same for others)
+- Sign executable?
+- Publish mac app store vs brew
+- Publish linux packages(maybe just brew)
+- Faster startup?
 
 ## Installation
 
