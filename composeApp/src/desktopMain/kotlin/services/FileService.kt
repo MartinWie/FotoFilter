@@ -15,22 +15,46 @@ class FileService {
 
         val files = folder.listFiles() ?: return@withContext emptyList()
 
-        // Group files by base name for RAW/JPEG pairs
+        // Group files by base name for RAW/processed image pairs
         val filesByBaseName = files.groupBy { it.nameWithoutExtension }
 
         filesByBaseName.mapNotNull { (baseName, files) ->
             val rawFile = files.find { isRawFile(it.extension) }
-            val jpegFile = files.find { isJpegFile(it.extension) }
+            val processedFile = files.find { isProcessedImageFile(it.extension) }
 
-            // Only include if we have at least a RAW file
-            rawFile?.let {
-                Photo(
-                    rawPath = it.absolutePath,
-                    jpegPath = jpegFile?.absolutePath,
-                    fileName = baseName,
-                    dateCreated = it.lastModified(),
-                    status = PhotoStatus.UNDECIDED
-                )
+            // Include if we have at least one supported file type
+            when {
+                rawFile != null && processedFile != null -> {
+                    // Both RAW and processed image exist
+                    Photo(
+                        rawPath = rawFile.absolutePath,
+                        jpegPath = processedFile.absolutePath,
+                        fileName = baseName,
+                        dateCreated = rawFile.lastModified(),
+                        status = PhotoStatus.UNDECIDED
+                    )
+                }
+                rawFile != null -> {
+                    // Only RAW file exists
+                    Photo(
+                        rawPath = rawFile.absolutePath,
+                        jpegPath = null,
+                        fileName = baseName,
+                        dateCreated = rawFile.lastModified(),
+                        status = PhotoStatus.UNDECIDED
+                    )
+                }
+                processedFile != null -> {
+                    // Only processed image exists
+                    Photo(
+                        rawPath = null,
+                        jpegPath = processedFile.absolutePath,
+                        fileName = baseName,
+                        dateCreated = processedFile.lastModified(),
+                        status = PhotoStatus.UNDECIDED
+                    )
+                }
+                else -> null
             }
         }.sortedBy { it.dateCreated }
     }
@@ -42,10 +66,12 @@ class FileService {
         }
 
         photos.forEach { photo ->
-            // Copy RAW file
-            copyFileIfExists(photo.rawPath, destDir)
+            // Copy RAW file if it exists
+            photo.rawPath?.let { rawPath ->
+                copyFileIfExists(rawPath, destDir)
+            }
 
-            // Copy JPEG file if it exists
+            // Copy processed image file if it exists
             photo.jpegPath?.let { jpegPath ->
                 copyFileIfExists(jpegPath, destDir)
             }
@@ -61,10 +87,56 @@ class FileService {
     }
 
     private fun isRawFile(extension: String): Boolean {
-        return extension.lowercase() in setOf("cr3", "cr2", "nef", "arw", "dng", "raw", "raf", "orf")
+        return extension.lowercase() in setOf(
+            // Canon
+            "cr3", "cr2", "crw",
+            // Nikon
+            "nef", "nrw",
+            // Sony
+            "arw", "srf", "sr2",
+            // Adobe
+            "dng",
+            // Generic
+            "raw",
+            // Fujifilm
+            "raf",
+            // Olympus
+            "orf",
+            // Panasonic
+            "rw2",
+            // Pentax
+            "pef",
+            // Leica
+            "rwl", "dcs",
+            // Hasselblad
+            "3fr",
+            // Mamiya
+            "mef",
+            // Phase One
+            "iiq",
+            // Sigma
+            "x3f"
+        )
     }
 
-    private fun isJpegFile(extension: String): Boolean {
-        return extension.lowercase() in setOf("jpg", "jpeg")
+    private fun isProcessedImageFile(extension: String): Boolean {
+        return extension.lowercase() in setOf(
+            // Standard JPEG
+            "jpg", "jpeg",
+            // Apple HEIC/HEIF
+            "heic", "heif",
+            // PNG
+            "png",
+            // WebP (Google)
+            "webp",
+            // TIFF
+            "tiff", "tif",
+            // BMP
+            "bmp",
+            // Android/Google formats
+            "avif",
+            // Additional mobile formats
+            "jfif"
+        )
     }
 }

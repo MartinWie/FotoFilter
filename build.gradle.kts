@@ -36,6 +36,13 @@ kotlin {
                 implementation("ch.qos.logback:logback-classic:1.4.11")
                 // Add logging framework
                 implementation("io.github.oshai:kotlin-logging-jvm:5.1.0")
+                // Add ImageIO plugins for additional format support (HEIC, WebP, etc.)
+                implementation("com.twelvemonkeys.imageio:imageio-core:3.12.0")
+                implementation("com.twelvemonkeys.imageio:imageio-jpeg:3.12.0")
+                implementation("com.twelvemonkeys.imageio:imageio-tiff:3.12.0")
+                implementation("com.twelvemonkeys.imageio:imageio-webp:3.12.0")
+                // Add HEIC support via external converter approach
+                implementation("org.apache.commons:commons-exec:1.3")
             }
         }
     }

@@ -21,6 +21,9 @@ import kotlinx.coroutines.awaitAll
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.Semaphore
 import utils.Logger
+import org.apache.commons.exec.CommandLine
+import org.apache.commons.exec.DefaultExecutor
+import org.apache.commons.exec.ExecuteWatchdog
 
 class ThumbnailCacheService {
     private val baseCacheDir = File(System.getProperty("user.home"), ".fotofilter/thumbnails")
@@ -202,7 +205,7 @@ class ThumbnailCacheService {
 
     private fun generateThumbnailCache(photo: Photo, folderPath: String): ImageBitmap? {
         try {
-            val originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.rawPath))
+            val originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.primaryPath))
                 ?: return null
 
             val thumbnail = resizeImage(originalImage, thumbnailSize)
@@ -223,7 +226,7 @@ class ThumbnailCacheService {
 
     private fun generatePreviewCache(photo: Photo, folderPath: String): ImageBitmap? {
         try {
-            val originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.rawPath))
+            val originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.primaryPath))
                 ?: return null
 
             val preview = resizeImage(originalImage, previewSize)
@@ -255,7 +258,7 @@ class ThumbnailCacheService {
     }
 
     private fun generateFileHash(photo: Photo): String {
-        val path = photo.jpegPath ?: photo.rawPath
+        val path = photo.jpegPath ?: photo.primaryPath
         val file = File(path)
         val input = "${file.absolutePath}_${file.lastModified()}_${file.length()}"
 
@@ -266,7 +269,8 @@ class ThumbnailCacheService {
 
     private fun loadImageWithCorrectOrientation(file: File): BufferedImage? {
         try {
-            val originalImage = ImageIO.read(file) ?: return null
+            // Try to load the image with enhanced format support
+            val originalImage = loadImageWithFormatSupport(file) ?: return null
 
             val orientation = try {
                 val metadata = ImageMetadataReader.readMetadata(file)
@@ -278,8 +282,285 @@ class ThumbnailCacheService {
 
             return applyOrientation(originalImage, orientation)
         } catch (e: Exception) {
-            return ImageIO.read(file)
+            Logger.cacheService.warn(e) { "Error loading image with orientation: ${file.name}" }
+            return loadImageWithFormatSupport(file)
         }
+    }
+
+    private fun loadImageWithFormatSupport(file: File): BufferedImage? {
+        val extension = file.extension.lowercase()
+
+        return when (extension) {
+            "heic", "heif" -> loadHeicImage(file)
+            // RAW file formats
+            "cr3", "cr2", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "raw",
+            "raf", "orf", "rw2", "pef", "rwl", "dcs", "3fr", "mef", "iiq", "x3f" -> loadRawImage(file)
+            else -> {
+                try {
+                    // Try standard ImageIO first (now enhanced with TwelveMonkeys plugins)
+                    ImageIO.read(file)
+                } catch (e: Exception) {
+                    Logger.cacheService.debug(e) { "Standard ImageIO failed for ${file.name}, trying alternative methods" }
+                    null
+                }
+            }
+        }
+    }
+
+    private fun loadHeicImage(file: File): BufferedImage? {
+        return try {
+            // First, try to use macOS native conversion via sips command (available on macOS)
+            if (System.getProperty("os.name").lowercase().contains("mac")) {
+                convertHeicWithSips(file)
+            } else {
+                // On other platforms, try ImageIO with plugins or fallback
+                ImageIO.read(file) ?: generateHeicPlaceholder(file)
+            }
+        } catch (e: Exception) {
+            Logger.cacheService.warn(e) { "Failed to load HEIC image: ${file.name}" }
+            generateHeicPlaceholder(file)
+        }
+    }
+
+    private fun loadRawImage(file: File): BufferedImage? {
+        return try {
+            // Try to load with TwelveMonkeys ImageIO plugins (which may support some RAW formats)
+            Logger.cacheService.debug { "Attempting to load RAW file with TwelveMonkeys ImageIO: ${file.name}" }
+            val image = ImageIO.read(file)
+
+            if (image != null) {
+                Logger.cacheService.info { "Successfully loaded RAW file with ImageIO: ${file.name} (${image.width}x${image.height})" }
+                return image
+            } else {
+                Logger.cacheService.debug { "TwelveMonkeys ImageIO could not read RAW file: ${file.name}" }
+                return generateUnsupportedPlaceholder(file)
+            }
+        } catch (e: Exception) {
+            Logger.cacheService.debug(e) { "Error loading RAW file with ImageIO: ${file.name}" }
+            generateUnsupportedPlaceholder(file)
+        }
+    }
+
+    private fun generateUnsupportedPlaceholder(file: File): BufferedImage {
+        // Create a placeholder image indicating the format is not supported
+        val width = 400
+        val height = 300
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+        val g2d = image.createGraphics()
+
+        // Set background to a neutral color
+        g2d.color = java.awt.Color(245, 245, 245)
+        g2d.fillRect(0, 0, width, height)
+
+        // Draw border
+        g2d.color = java.awt.Color(200, 200, 200)
+        g2d.drawRect(0, 0, width - 1, height - 1)
+
+        // Draw file extension
+        g2d.color = java.awt.Color(60, 60, 60)
+        g2d.font = java.awt.Font("Arial", java.awt.Font.BOLD, 28)
+
+        val extension = file.extension.uppercase()
+        val extensionMetrics = g2d.fontMetrics
+        val extensionWidth = extensionMetrics.stringWidth(extension)
+
+        g2d.drawString(extension, (width - extensionWidth) / 2, height / 2 - 40)
+
+        // Draw "Not Supported" message
+        g2d.font = java.awt.Font("Arial", java.awt.Font.PLAIN, 16)
+        val message = "Currently not supported"
+        val messageMetrics = g2d.fontMetrics
+        val messageWidth = messageMetrics.stringWidth(message)
+
+        g2d.drawString(message, (width - messageWidth) / 2, height / 2 - 5)
+
+        // Draw filename
+        g2d.font = java.awt.Font("Arial", java.awt.Font.PLAIN, 12)
+        val fileName = file.name
+        val fileNameMetrics = g2d.fontMetrics
+        val fileNameWidth = fileNameMetrics.stringWidth(fileName)
+
+        // If filename is too long, truncate it
+        val displayName = if (fileNameWidth > width - 20) {
+            val truncated = fileName.take(35) + "..."
+            truncated
+        } else {
+            fileName
+        }
+
+        val displayWidth = g2d.fontMetrics.stringWidth(displayName)
+        g2d.drawString(displayName, (width - displayWidth) / 2, height / 2 + 25)
+
+        g2d.dispose()
+        return image
+    }
+
+    private fun convertRawWithSips(file: File): BufferedImage? {
+        return try {
+            // Create a temporary JPEG file
+            val tempDir = File(System.getProperty("java.io.tmpdir"))
+            val tempJpegFile = File(tempDir, "raw_temp_${System.currentTimeMillis()}.jpg")
+
+            // Use macOS sips command to convert RAW to JPEG
+            val cmdLine = CommandLine("sips")
+            cmdLine.addArgument("-s")
+            cmdLine.addArgument("format")
+            cmdLine.addArgument("jpeg")
+            cmdLine.addArgument(file.absolutePath)
+            cmdLine.addArgument("--out")
+            cmdLine.addArgument(tempJpegFile.absolutePath)
+
+            val executor = DefaultExecutor()
+            executor.setExitValue(0)
+
+            // Set a timeout for the conversion (30 seconds)
+            executor.setWatchdog(ExecuteWatchdog(30000))
+
+            Logger.cacheService.debug { "Attempting to convert RAW file: ${file.name}" }
+            val result = executor.execute(cmdLine)
+
+            if (result == 0 && tempJpegFile.exists() && tempJpegFile.length() > 0) {
+                val image = ImageIO.read(tempJpegFile)
+                tempJpegFile.delete() // Clean up temp file
+                if (image != null) {
+                    Logger.cacheService.debug { "Successfully converted RAW file: ${file.name} (${image.width}x${image.height})" }
+                    return image
+                } else {
+                    Logger.cacheService.debug { "Converted file exists but ImageIO couldn't read it: ${file.name}" }
+                }
+            } else {
+                Logger.cacheService.debug { "sips RAW conversion failed for ${file.name} - exit code: $result, file exists: ${tempJpegFile.exists()}, size: ${if (tempJpegFile.exists()) tempJpegFile.length() else "N/A"}" }
+            }
+
+            // Clean up temp file if it exists
+            if (tempJpegFile.exists()) {
+                tempJpegFile.delete()
+            }
+
+            return null
+        } catch (e: Exception) {
+            Logger.cacheService.debug(e) { "sips RAW conversion error for ${file.name}: ${e.message}" }
+            null
+        }
+    }
+
+    private fun convertHeicWithSips(file: File): BufferedImage? {
+        return try {
+            // Create a temporary JPEG file
+            val tempDir = File(System.getProperty("java.io.tmpdir"))
+            val tempJpegFile = File(tempDir, "heic_temp_${System.currentTimeMillis()}.jpg")
+
+            // Use macOS sips command to convert HEIC to JPEG
+            val cmdLine = CommandLine("sips")
+            cmdLine.addArgument("-s")
+            cmdLine.addArgument("format")
+            cmdLine.addArgument("jpeg")
+            cmdLine.addArgument(file.absolutePath)
+            cmdLine.addArgument("--out")
+            cmdLine.addArgument(tempJpegFile.absolutePath)
+
+            val executor = DefaultExecutor()
+            executor.setExitValue(0)
+
+            val result = executor.execute(cmdLine)
+
+            if (result == 0 && tempJpegFile.exists()) {
+                val image = ImageIO.read(tempJpegFile)
+                tempJpegFile.delete() // Clean up temp file
+                image
+            } else {
+                Logger.cacheService.debug { "sips conversion failed for ${file.name}" }
+                null
+            }
+        } catch (e: Exception) {
+            Logger.cacheService.debug(e) { "sips conversion error for ${file.name}" }
+            null
+        }
+    }
+
+    private fun generateHeicPlaceholder(file: File): BufferedImage {
+        // Create a placeholder image with HEIC file info
+        val width = 400
+        val height = 300
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+        val g2d = image.createGraphics()
+
+        // Set background
+        g2d.color = java.awt.Color(240, 240, 240)
+        g2d.fillRect(0, 0, width, height)
+
+        // Draw border
+        g2d.color = java.awt.Color(200, 200, 200)
+        g2d.drawRect(0, 0, width - 1, height - 1)
+
+        // Draw HEIC icon/text
+        g2d.color = java.awt.Color(100, 100, 100)
+        g2d.font = java.awt.Font("Arial", java.awt.Font.BOLD, 24)
+
+        val text = "HEIC"
+        val fontMetrics = g2d.fontMetrics
+        val textWidth = fontMetrics.stringWidth(text)
+        val textHeight = fontMetrics.height
+
+        g2d.drawString(text, (width - textWidth) / 2, (height + textHeight) / 2 - 20)
+
+        // Draw filename
+        g2d.font = java.awt.Font("Arial", java.awt.Font.PLAIN, 12)
+        val fileName = file.name
+        val fileNameMetrics = g2d.fontMetrics
+        val fileNameWidth = fileNameMetrics.stringWidth(fileName)
+
+        g2d.drawString(fileName, (width - fileNameWidth) / 2, (height + textHeight) / 2 + 20)
+
+        g2d.dispose()
+        return image
+    }
+
+    private fun generateRawPlaceholder(file: File): BufferedImage {
+        // Create a placeholder image with RAW file info
+        val width = 400
+        val height = 300
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+        val g2d = image.createGraphics()
+
+        // Set background to a darker color to distinguish from HEIC
+        g2d.color = java.awt.Color(220, 220, 220)
+        g2d.fillRect(0, 0, width, height)
+
+        // Draw border
+        g2d.color = java.awt.Color(180, 180, 180)
+        g2d.drawRect(0, 0, width - 1, height - 1)
+
+        // Draw RAW icon/text
+        g2d.color = java.awt.Color(80, 80, 80)
+        g2d.font = java.awt.Font("Arial", java.awt.Font.BOLD, 24)
+
+        val extension = file.extension.uppercase()
+        val text = if (extension.isNotEmpty()) extension else "RAW"
+        val fontMetrics = g2d.fontMetrics
+        val textWidth = fontMetrics.stringWidth(text)
+        val textHeight = fontMetrics.height
+
+        g2d.drawString(text, (width - textWidth) / 2, (height + textHeight) / 2 - 20)
+
+        // Draw filename
+        g2d.font = java.awt.Font("Arial", java.awt.Font.PLAIN, 12)
+        val fileName = file.name
+        val fileNameMetrics = g2d.fontMetrics
+        val fileNameWidth = fileNameMetrics.stringWidth(fileName)
+
+        g2d.drawString(fileName, (width - fileNameWidth) / 2, (height + textHeight) / 2 + 20)
+
+        // Add "RAW File" subtitle
+        g2d.font = java.awt.Font("Arial", java.awt.Font.ITALIC, 10)
+        val subtitle = "RAW File"
+        val subtitleMetrics = g2d.fontMetrics
+        val subtitleWidth = subtitleMetrics.stringWidth(subtitle)
+
+        g2d.drawString(subtitle, (width - subtitleWidth) / 2, (height + textHeight) / 2 + 40)
+
+        g2d.dispose()
+        return image
     }
 
     private fun detectOrientationFromContext(file: File, image: BufferedImage): Int {
@@ -462,7 +743,7 @@ class ThumbnailCacheService {
         var thumbnail: BufferedImage? = null
 
         try {
-            originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.rawPath))
+            originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.primaryPath))
                 ?: return false
 
             thumbnail = resizeImage(originalImage, thumbnailSize)
@@ -493,7 +774,7 @@ class ThumbnailCacheService {
         var preview: BufferedImage? = null
 
         try {
-            originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.rawPath))
+            originalImage = loadImageWithCorrectOrientation(File(photo.jpegPath ?: photo.primaryPath))
                 ?: return false
 
             preview = resizeImage(originalImage, previewSize)
@@ -531,5 +812,97 @@ class ThumbnailCacheService {
         val projectDir = File(baseCacheDir, safeName)
         projectDir.mkdirs()
         return projectDir
+    }
+
+    private fun convertRawWithSipsAdvanced(file: File): BufferedImage? {
+        return try {
+            // Create a temporary JPEG file
+            val tempDir = File(System.getProperty("java.io.tmpdir"))
+            val tempJpegFile = File(tempDir, "raw_temp_${System.currentTimeMillis()}.jpg")
+
+            // Use simpler sips command - the advanced options were causing issues
+            val cmdLine = CommandLine("sips")
+            cmdLine.addArgument("-s")
+            cmdLine.addArgument("format")
+            cmdLine.addArgument("jpeg")
+            cmdLine.addArgument(file.absolutePath)
+            cmdLine.addArgument("--out")
+            cmdLine.addArgument(tempJpegFile.absolutePath)
+
+            val executor = DefaultExecutor()
+            executor.setExitValue(0)
+
+            // Shorter timeout since we're not doing heavy processing
+            executor.setWatchdog(ExecuteWatchdog(10000)) // 10 seconds
+
+            Logger.cacheService.debug { "Attempting simple sips conversion for RAW file: ${file.name}" }
+            val result = executor.execute(cmdLine)
+
+            if (result == 0 && tempJpegFile.exists() && tempJpegFile.length() > 1000) { // At least 1KB
+                val image = ImageIO.read(tempJpegFile)
+                tempJpegFile.delete() // Clean up temp file
+                if (image != null && image.width > 10 && image.height > 10) { // Sanity check
+                    Logger.cacheService.info { "Successfully converted RAW file with sips: ${file.name} (${image.width}x${image.height})" }
+                    return image
+                } else {
+                    Logger.cacheService.debug { "Converted file exists but appears invalid: ${file.name}" }
+                }
+            } else {
+                Logger.cacheService.debug { "sips RAW conversion failed for ${file.name} - exit code: $result, file exists: ${tempJpegFile.exists()}, size: ${if (tempJpegFile.exists()) tempJpegFile.length() else "N/A"}" }
+            }
+
+            // Clean up temp file if it exists
+            if (tempJpegFile.exists()) {
+                tempJpegFile.delete()
+            }
+
+            return null
+        } catch (e: Exception) {
+            Logger.cacheService.debug(e) { "sips RAW conversion error for ${file.name}: ${e.message}" }
+            null
+        }
+    }
+
+    private fun convertRawWithQuickLook(file: File): BufferedImage? {
+        return try {
+            // Create a temporary directory for QuickLook output
+            val tempDir = File(System.getProperty("java.io.tmpdir"))
+            val tempPngFile = File(tempDir, "ql_temp_${System.currentTimeMillis()}.png")
+
+            // Use qlmanage to generate a preview
+            val cmdLine = CommandLine("qlmanage")
+            cmdLine.addArgument("-t")
+            cmdLine.addArgument("-s")
+            cmdLine.addArgument("1024") // Preview size
+            cmdLine.addArgument("-o")
+            cmdLine.addArgument(tempDir.absolutePath)
+            cmdLine.addArgument(file.absolutePath)
+
+            val executor = DefaultExecutor()
+            executor.setExitValue(0)
+            executor.setWatchdog(ExecuteWatchdog(30000))
+
+            Logger.cacheService.debug { "Attempting QuickLook conversion for RAW file: ${file.name}" }
+            val result = executor.execute(cmdLine)
+
+            if (result == 0) {
+                // qlmanage creates files with specific naming convention
+                val expectedFile = File(tempDir, "${file.nameWithoutExtension}.png")
+                if (expectedFile.exists() && expectedFile.length() > 1000) {
+                    val image = ImageIO.read(expectedFile)
+                    expectedFile.delete() // Clean up temp file
+                    if (image != null && image.width > 10 && image.height > 10) {
+                        Logger.cacheService.info { "Successfully converted RAW file with QuickLook: ${file.name} (${image.width}x${image.height})" }
+                        return image
+                    }
+                }
+            }
+
+            Logger.cacheService.debug { "QuickLook RAW conversion failed for ${file.name}" }
+            return null
+        } catch (e: Exception) {
+            Logger.cacheService.debug(e) { "QuickLook RAW conversion error for ${file.name}: ${e.message}" }
+            null
+        }
     }
 }

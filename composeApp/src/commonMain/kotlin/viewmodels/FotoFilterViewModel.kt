@@ -15,7 +15,6 @@ import services.CachedProject
 import utils.ImageUtils
 import utils.Logger
 
-// Simplified ViewModel that directly uses FileService instead of repository pattern
 class FotoFilterViewModel {
     private val _state = MutableStateFlow(PhotoLibrary())
     val state: StateFlow<PhotoLibrary> = _state.asStateFlow()

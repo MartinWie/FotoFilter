@@ -101,10 +101,10 @@ actual class SelectionPersistenceService {
         try {
             // Save ALL photos with their current status, not just decided ones
             val selections = photos.map { photo ->
-                // Always use RAW file for consistency in file metadata
-                val file = File(photo.rawPath)
+                // Use primary file (RAW if available, otherwise processed image) for consistency
+                val file = File(photo.primaryPath)
                 PhotoSelection(
-                    photoPath = photo.rawPath,
+                    photoPath = photo.primaryPath,
                     status = photo.status.name,
                     lastModified = file.lastModified(),
                     fileSize = file.length()
@@ -127,14 +127,11 @@ actual class SelectionPersistenceService {
             }
 
             // Generate thumbnail hashes for cleanup tracking - use same logic as ThumbnailCacheService
-            val newThumbnailHashes = if (existingThumbnailHashes.isNotEmpty()) {
-                // If we have existing hashes, preserve them (don't regenerate)
-                existingThumbnailHashes
-            } else {
+            val newThumbnailHashes = existingThumbnailHashes.ifEmpty {
                 // Only generate new hashes if we don't have any (first time saving this project)
                 photos.map { photo ->
-                    // Use same path logic as ThumbnailCacheService: prefer JPEG, fallback to RAW
-                    val path = photo.jpegPath ?: photo.rawPath
+                    // Use same path logic as ThumbnailCacheService: prefer JPEG, fallback to primary path
+                    val path = photo.jpegPath ?: photo.primaryPath
                     generateFileHash(path, File(path))
                 }
             }
@@ -178,10 +175,10 @@ actual class SelectionPersistenceService {
             // Apply saved selections to photos, but verify file hasn't changed
             var appliedCount = 0
             val updatedPhotos = photos.map { photo ->
-                val savedSelection = selectionMap[photo.rawPath]
+                val savedSelection = selectionMap[photo.primaryPath]
 
                 if (savedSelection != null) {
-                    val file = File(photo.rawPath)
+                    val file = File(photo.primaryPath)
 
                     // Only apply if file hasn't been modified since selection was saved
                     if (file.lastModified() == savedSelection.lastModified &&

@@ -17,8 +17,6 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
-- Add support for of only one exists(raw or jpeg) 
-- Add support for photo types like .heic or android format(look most commons)
 - Go back to main window option and general look at main page and see how to improve
 - Fix theming( folder selection dialog is light themed, even though the OS theme is dark, same with top bar)
 - Shortcut for sidebar toggle
