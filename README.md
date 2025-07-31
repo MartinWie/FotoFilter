@@ -17,15 +17,39 @@ FotoFilter is a fast, keyboard-driven tool for photographers to quickly cull and
 
 ### TODO's
 
+- Add support for of only one exists(raw or jpeg) 
+- Add support for photo types like .heic or android format(look most commons)
 - Go back to main window option and general look at main page and see how to improve
 - Fix theming( folder selection dialog is light themed, even though the OS theme is dark, same with top bar)
 - Shortcut for sidebar toggle
+- Go through whole code base and clean up / understand the project again after the massive AI push
 - Fix zoom (drag to change current area in view)
-- customize shortcuts in options
-- Add option to control image preview quality(make sure we use the JPEG's for the view)
+- customize shortcuts in options(Add settings menu)
+- Add option to control image preview quality(make sure we use the JPEG's for the view)(make sure the user knows that the higher we go the slower the processing will be)
 - Check about using preloadImages/try to optimize image loading
 - Faster start
 - When click on remaining only show remaining(same for others)
+- First website draft(download)
+- Setup Backend
+  - user account
+  - license table(start with dummy function)
+- Add cloud sync option(upload projects(only the previews))
+- Add option for remote image selection(no export, just the selection)
+- Add check for newer voting state / SSE sync here
+- Create app to do the voting
+  - Login
+  - Sync projects / SSE
+  - swipe: left, right or up for undecide
+- Make backend ready for full album uploads(maybe new website)
+  - Album create setup has an id, name, expiration date (max 3 months), published flag and link to zip resource(start with null and generate on publish)
+    - Data classes(album and photo)
+    - DB tables(album and photo)
+    - Service(create, delete and publish) (album and photo)
+    - Controller(album and photo)
+  - Make album downloadable on link(userId/albumId make sure to check published flag)(setting publish will zip the images, set the resource of the album)
+    - Publishing flow
+    - Make sure a published album gets new resource on first download after a new image was uploaded to it
+  - Create download page with album preview image and download button
 
 ## Installation
 
