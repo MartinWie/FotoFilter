@@ -70,10 +70,12 @@ fun PhotoGridScreen(
     val isLoadingProjects by viewModel.isLoadingProjects.collectAsState()
     var showFolderDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
+    var showExportOptionsDialog by remember { mutableStateOf(false) }
     var showShortcutsDialog by remember { mutableStateOf(false) }
     var isSidebarVisible by remember { mutableStateOf(false) } // Changed from true to false so sidebar is folded by default
     val coroutineScope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+    var showSkippedDialog by remember { mutableStateOf(false) }
 
     // Load cached projects when screen is first shown
     LaunchedEffect(Unit) {
@@ -103,7 +105,7 @@ fun PhotoGridScreen(
                     Key.D, Key.Delete -> viewModel.handleKeyPress("delete")
                     Key.U -> viewModel.handleKeyPress("u")
                     Key.E -> {
-                        if (state.keptPhotos > 0) showExportDialog = true
+                        if (state.keptPhotos > 0 || state.discardedPhotos > 0) showExportOptionsDialog = true
                         true
                     }
                     Key.H -> {
@@ -224,8 +226,8 @@ fun PhotoGridScreen(
                         }
 
                         FilledTonalButton(
-                            onClick = { showExportDialog = true },
-                            enabled = state.keptPhotos > 0,
+                            onClick = { if (state.keptPhotos > 0 || state.discardedPhotos > 0) showExportOptionsDialog = true },
+                            enabled = state.keptPhotos > 0 || state.discardedPhotos > 0,
                             modifier = Modifier.height(32.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                         ) {
@@ -466,65 +468,66 @@ fun PhotoGridScreen(
             }
         }
 
-        // Export overlay
-        if (state.isExporting || state.exportCompleted) {
+        // Export or Delete overlay (combined logic)
+        if (state.isExporting || state.exportCompleted || state.isDeleting || state.deleteCompleted) {
             Box(
                 modifier = Modifier.fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.7f * exportOverlayAlpha))
-                    .clickable(enabled = false) {},  // Prevent clicks through the overlay
+                    .clickable(enabled = false) {},
                 contentAlignment = Alignment.Center
             ) {
                 Surface(
                     modifier = Modifier
-                        .width(400.dp)
+                        .width(480.dp) // make wider so text and buttons fit
                         .padding(16.dp)
                         .animateContentSize(),
                     shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surface
                 ) {
                     Column(
-                        modifier = Modifier.padding(24.dp),
+                        modifier = Modifier.padding(32.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(20.dp)
+                        verticalArrangement = Arrangement.spacedBy(24.dp)
                     ) {
-                        if (state.isExporting) {
-                            // Exporting animation
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(56.dp),
-                                strokeWidth = 4.dp
-                            )
-
-                            Text(
-                                "Exporting ${state.keptPhotos} photos...",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-
-                            LinearProgressIndicator(
-                                modifier = Modifier.fillMaxWidth()
-                                    .height(8.dp)
-                                    .clip(MaterialTheme.shapes.small)
-                            )
-                        } else if (state.exportCompleted) {
-                            // Success animation
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = "Export Complete",
-                                modifier = Modifier.size(64.dp)
-                                    .background(Color(0xFF4CAF50), CircleShape)
-                                    .padding(12.dp),
-                                tint = Color.White
-                            )
-
-                            Text(
-                                "Export Complete!",
-                                style = MaterialTheme.typography.headlineSmall
-                            )
-
-                            Text(
-                                "Successfully exported ${state.keptPhotos} photos to:\n${state.exportPath}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                textAlign = TextAlign.Center
-                            )
+                        when {
+                            state.isExporting -> {
+                                CircularProgressIndicator(modifier = Modifier.size(56.dp), strokeWidth = 4.dp)
+                                Text("Copying kept photos…", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(6.dp).clip(MaterialTheme.shapes.small))
+                            }
+                            state.exportCompleted -> {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(72.dp).background(Color(0xFF4CAF50), CircleShape).padding(16.dp),
+                                    tint = Color.White
+                                )
+                                Text("Export Complete", style = MaterialTheme.typography.headlineSmall)
+                                Text(
+                                    "${state.keptPhotos} photos copied to:\n${state.exportPath}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                            state.isDeleting -> {
+                                CircularProgressIndicator(modifier = Modifier.size(56.dp), strokeWidth = 4.dp, color = MaterialTheme.colorScheme.error)
+                                Text("Deleting discarded photos…", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(6.dp).clip(MaterialTheme.shapes.small), color = MaterialTheme.colorScheme.error)
+                            }
+                            state.deleteCompleted -> {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(72.dp).background(Color(0xFFD32F2F), CircleShape).padding(16.dp),
+                                    tint = Color.White
+                                )
+                                Text("Deletion Complete", style = MaterialTheme.typography.headlineSmall)
+                                Text(
+                                    "${state.lastDeletedCount} discarded photos deleted",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }
@@ -550,6 +553,42 @@ fun PhotoGridScreen(
                 showFolderDialog = false
                 // Request focus again after dialog closes
                 focusRequester.requestFocus()
+            }
+        )
+    }
+
+    // New export options dialog
+    if (showExportOptionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportOptionsDialog = false },
+            title = { Text("Actions") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Choose an action for your selections:")
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        AssistChip(
+                            onClick = {
+                                showExportOptionsDialog = false
+                                showExportDialog = true
+                            },
+                            label = { Text("Copy kept photos") },
+                            enabled = state.keptPhotos > 0
+                        )
+                        AssistChip(
+                            onClick = {
+                                showExportOptionsDialog = false
+                                viewModel.deleteDiscardedPhotos()
+                            },
+                            label = { Text("Delete discarded") },
+                            enabled = state.discardedPhotos > 0,
+                            colors = AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                        )
+                    }
+                    Text("Kept: ${state.keptPhotos}  •  Discarded: ${state.discardedPhotos}", style = MaterialTheme.typography.labelMedium)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showExportOptionsDialog = false }) { Text("Close") }
             }
         )
     }
@@ -581,9 +620,35 @@ fun PhotoGridScreen(
         })
     }
 
+    // Show warning dialog if skippedFiles not empty after loading photos
+    LaunchedEffect(state.skippedFiles) {
+        if (state.skippedFiles.isNotEmpty()) showSkippedDialog = true
+    }
+
     // Keyboard handling
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
+    }
+
+    if (showSkippedDialog) {
+        AlertDialog(
+            onDismissRequest = { showSkippedDialog = false },
+            title = { Text("Some files were skipped") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${state.skippedFiles.size} files could not be imported (unsupported format).")
+                    Spacer(Modifier.height(8.dp))
+                    val preview = state.skippedFiles.take(10)
+                    preview.forEach { Text(it, style = MaterialTheme.typography.labelSmall) }
+                    if (state.skippedFiles.size > preview.size) {
+                        Text("…and ${state.skippedFiles.size - preview.size} more", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSkippedDialog = false }) { Text("OK") }
+            }
+        )
     }
 }
 
