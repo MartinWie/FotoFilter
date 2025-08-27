@@ -127,8 +127,8 @@ class FileService {
         }.sortedBy { it.dateCreated }
 
         val skippedRel = unsupported.mapNotNull { f ->
-            // Skip hidden/system files starting with dot with no extension
-            if (f.name.startsWith('.') && f.extension.isEmpty()) null else {
+            // Skip hidden/system files starting with dot with no extension, and macOS .DS_Store meta files
+            if ((f.name.startsWith('.') && f.extension.isEmpty()) || f.name.equals(".DS_Store", ignoreCase = true)) null else {
                 val abs = f.absolutePath
                 if (abs.length > basePathLength) abs.substring(basePathLength) else f.name
             }
